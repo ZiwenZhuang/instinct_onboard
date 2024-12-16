@@ -1,0 +1,1 @@
+ros2 bag record -s mcap -o $1 /lowstate /wirelesscontroller /lowcmd
