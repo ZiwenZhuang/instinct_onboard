@@ -305,11 +305,11 @@ class UnitreeRos2Real(Node):
         self.torque_limits = getattr(RobotCfgs, self.robot_class_name).torque_limits
         
         # buffers for observation output (in simulation order)
-        self.dof_pos_ = np.zeros(self.NUM_DOF) # in robot urdf coordinate, but in simulation order. no offset substracted
-        self.dof_vel_ = np.zeros(self.NUM_DOF)
+        self.dof_pos_ = np.zeros(self.NUM_DOF, dtype=np.float32) # in robot urdf coordinate, but in simulation order. no offset substracted
+        self.dof_vel_ = np.zeros(self.NUM_DOF, dtype=np.float32)
         
         # actions
-        self.actions_scale = np.zeros(self.NUM_ACTIONS)
+        self.actions_scale = np.zeros(self.NUM_ACTIONS, dtype=np.float32)
         for action_names, action_config in self.cfg["actions"].items():
             if not action_config["asset_name"] == "robot":
                 continue

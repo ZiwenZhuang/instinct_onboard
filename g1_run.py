@@ -15,18 +15,12 @@ import torch
 import yaml
 import onnxruntime as ort
 
-try:
-    import pytorch_kinematics as pk
-except:
-    print("pytorch_kinematics not found. Builtin forward kinematics is disabled.")
-    pk = None
-
 from unitree_ros2_real import UnitreeRos2Real
 
 class G1Node(UnitreeRos2Real):
     def __init__(self,
             agent_cfg: dict = dict(),
-            robot_urdf_filepath: str = None, # if provided, forward kinematics will be computed by pytorch_kinematics at given speed.
+            interested_link_idx: int = None, # the link index to visualize the transform
             forward_kinematics_freq: float = 100., # the frequency of forward kinematics computation
             default_motion_ref_length: int = None, # if given, override the value from env.yaml and ignore exceeding input.
             model_device: torch.device = torch.device("cuda" if torch.cuda.is_available() else "cpu"),
@@ -34,38 +28,24 @@ class G1Node(UnitreeRos2Real):
         ):
         super().__init__(**kwargs)
         self.agent_cfg = agent_cfg
-        self.robot_urdf_filepath = robot_urdf_filepath
+        self.interested_link_idx = interested_link_idx
         self.forward_kinematics_freq = forward_kinematics_freq
         self.default_motion_ref_length = default_motion_ref_length
         self.model_device = model_device
 
-        if self.robot_urdf_filepath is not None:
-            self._initialize_robot_kinematics()
-
         self._initialize_motion_reference_buffer()
     
-    def _initialize_robot_kinematics(self):
-        """ Initialize the robot kinematics chain for forward kinematics and interested links. """
-        # initialize the robot kinematics chain
-        assert pk is not None, "pytorch_kinematics is not found. Please install it to use forward kinematics."
-        with open(self.robot_urdf_filepath, "r") as f:
-            self._robot_kinematics_chain = pk.build_chain_from_urdf(f.read()).to(dtype= torch.float32, device= self.model_device)
-        
-        # get the joint order for the robot kinematics chain (_joint_order_to_[real_idx] == pk_idx)
-        pk_joint_names = self._robot_kinematics_chain.get_joint_parameter_names()
-        self._joint_order_robot_to_pk = [pk_joint_names.index(joint_name) for joint_name in self.real_dof_names]
-        self._pk_joint_pos = torch.zeros(self._robot_kinematics_chain.n_joints, dtype= torch.float32, device= self.model_device)
-
-        # initialize the interested links for forward kinematics
-        self._interested_link_names = self.cfg["scene"]["motion_reference"]["link_of_interests"]
-        self._interested_link_indices = self._robot_kinematics_chain.get_frame_indices(*self._interested_link_names) # in the order of interested_link_names
-        self._interested_link_pos_b = np.zeros((len(self._interested_link_names), 3), dtype= np.float64) # in the order of interested_link_names
-        # You may add link quaternion later.
-
     def _initialize_motion_reference_buffer(self):
         """ Initialize the motion reference buffer for the observation terms.
         Making a concatenated buffer so that the motion reference can be fed to the model faster.
         """
+
+        # initialize the interested links for forward kinematics and link_ref command buffer
+        self._interested_link_names = self.cfg["scene"]["motion_reference"]["link_of_interests"]
+        # self._interested_link_indices = self._robot_kinematics_chain.get_frame_indices(*self._interested_link_names) # in the order of interested_link_names
+        self._interested_link_pos_b = np.zeros((len(self._interested_link_names), 3), dtype= np.float32) # in the order of interested_link_names
+        # You may add link quaternion later.
+        print("Interested links: ", self._interested_link_names)
         
         motion_frame_size = 0
         self.motion_ref_term_slices = dict()
@@ -117,7 +97,8 @@ class G1Node(UnitreeRos2Real):
             dtype= np.float32,
         )
         # create a tf broadcaster for debugging forward kinematics.
-        self._insterested_link_tf_broadcaster = TransformBroadcaster(self)
+        if self.interested_link_idx is not None:
+            self._insterested_link_tf_broadcaster = TransformBroadcaster(self)
 
     """
     Callbacks to handle ROS-wise inputs.
@@ -125,23 +106,24 @@ class G1Node(UnitreeRos2Real):
 
     @torch.no_grad()
     def _robot_forward_kinematics_callback(self):
-        """ Compute the forward kinematics based on lowstate."""
-        for real_idx in range(self.NUM_DOF):
-            pk_idx = self._joint_order_robot_to_pk[real_idx]
-            self._pk_joint_pos[pk_idx] = self.dof_pos_[real_idx]
-        all_link_poses = self._robot_kinematics_chain.forward_kinematics(self._pk_joint_pos, frame_indices=self._interested_link_indices)
-        for i, link_name in enumerate(self._interested_link_names):
-            self._interested_link_pos_b[i] = all_link_poses[link_name].get_matrix().reshape(4, 4)[:3, 3].cpu()
+        """ Compute the forward kinematics based on lowstate, using exported ONNXProgram. """
+        input_name = self.onnx_sessions["forward_kinematics.onnx"].get_inputs()[0].name
+        onnx_outputs = self.onnx_sessions["forward_kinematics.onnx"].run(
+            None,
+            {
+                input_name: np.expand_dims(self.dof_pos_, axis= 0),
+            }
+        )
+        self._interested_link_pos_b[:] = onnx_outputs[0].reshape(len(self._interested_link_names), 3)
         
         if hasattr(self, "_insterested_link_tf_broadcaster"):
             tf_msg = TransformStamped()
             tf_msg.header.stamp = self.get_clock().now().to_msg()
             tf_msg.header.frame_id = "torso_link"
             tf_msg.child_frame_id = "interested_link"
-            interested_link_idx = 0
-            tf_msg.transform.translation.x = self._interested_link_pos_b[interested_link_idx, 0]
-            tf_msg.transform.translation.y = self._interested_link_pos_b[interested_link_idx, 1]
-            tf_msg.transform.translation.z = self._interested_link_pos_b[interested_link_idx, 2]
+            tf_msg.transform.translation.x = self._interested_link_pos_b[self.interested_link_idx, 0].item()
+            tf_msg.transform.translation.y = self._interested_link_pos_b[self.interested_link_idx, 1].item()
+            tf_msg.transform.translation.z = self._interested_link_pos_b[self.interested_link_idx, 2].item()
             self._insterested_link_tf_broadcaster.sendTransform(tf_msg)
 
     def _motion_reference_callback(self, msg: MotionReference):
@@ -221,8 +203,11 @@ class G1Node(UnitreeRos2Real):
     def start_ros_handlers(self):
         super().start_ros_handlers()
 
-        if self.robot_urdf_filepath is not None and self.forward_kinematics_freq > 0:
-            self.forward_kinematics_timer = self.create_timer(1./self.forward_kinematics_freq, self._robot_forward_kinematics_callback)
+        if "forward_kinematics.onnx" in self.onnx_sessions and self.forward_kinematics_freq > 0:
+            self.forward_kinematics_timer = self.create_timer(
+                1./self.forward_kinematics_freq,
+                self._robot_forward_kinematics_callback,
+            )
 
         main_loop_duration = self.cfg["sim"]["dt"] * self.cfg["decimation"]
         print("Starting main loop with duration: ", main_loop_duration)
@@ -243,7 +228,7 @@ class G1Node(UnitreeRos2Real):
         proprioception_obs = np.concatenate([
             np.expand_dims(self._get_proprioception_obs(), axis= 0),
             embeddings,
-        ], axis= 0)
+        ], axis= 1)
 
         # deal with GRU/MLP actor
         actor_inputs = self.onnx_sessions["actor.onnx"].get_inputs()
@@ -279,19 +264,11 @@ def load_onnx_sessions(model_dir: str) -> dict[str, ort.InferenceSession]:
             continue
         model_path = os.path.join(model_dir, model_name)
         sessions[model_name] = ort.InferenceSession(model_path, providers=ort_execution_providers)
+    print("ONNX models loaded: ", sessions.keys())
     return sessions
 
 def main(args):
     rclpy.init()
-
-    # process arguments with some default values
-    if args.urdf is None:
-        if args.runon == "mac":
-            args.urdf = "/Users/leo/Projects/g1_ws/src/g1_description/urdf/g1_29dof.urdf"
-        elif args.runon == "thinkpad":
-            args.urdf = "/home/leo/Projects/unitree_ros2/cyclonedds_ws/src/unitree/g1_description/urdf/g1_29dof.urdf"
-        elif args.runon == "jetson":
-            args.urdf = "/home/unitree/unitree_ros2/cyclonedds_ws/src/unitree/g1_description/urdf/g1_29dof.urdf"
 
     # read params
     with open(os.path.join(args.logdir, "params", "env.yaml"), "r") as f:
@@ -307,8 +284,8 @@ def main(args):
     node = G1Node(
         agent_cfg=agent_config,
         cfg=env_config,
-        robot_urdf_filepath=args.urdf,
-        model_device=torch.device("cuda"),
+        interested_link_idx=args.link_idx,
+        model_device=torch.device("mps") if args.runon == "mac" else torch.device("cuda" if torch.cuda.is_available() else "cpu"),
     )
     node.register_network(onnx_sessions)
     # node.start_ros_handlers()
@@ -334,7 +311,7 @@ if __name__ == "__main__":
     
     parser.add_argument("--debug", action= "store_true", default= False, help= "Enable debug mode")
     parser.add_argument("--logdir", type= str, default= None, help= "The directory which contains the config.json and model_*.pt files")
-    parser.add_argument("--urdf", type= str, default= None, help= "The URDF file path for the robot")
+    parser.add_argument("--link_idx", type= int, default= None, help= "The link index to viusalize the transfrom (computed by forward_kinematics ONNXProgram)")
     parser.add_argument("--runon", type= str, choices= ["mac", "thinkpad", "jetson", None], default= None, help= "The machine running the code")
     parser.add_argument("--nodryrun", action= "store_true", default= False, help= "Disable dryrun mode")
 
