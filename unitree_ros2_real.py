@@ -273,15 +273,15 @@ class UnitreeRos2Real(Node):
                 self.obs_scales[obs_names] = obs_config["scale"]
 
         # controls
-        self.default_dof_pos = np.zeros(self.NUM_DOF)
+        self.default_dof_pos = np.zeros(self.NUM_DOF, dtype=np.float32)
         for joint_name_expr, joint_pos in self.cfg["scene"]["robot"]["init_state"]["joint_pos"].items():
             # compute the default dof pos from configuration for articulation.default_dof_pos
             for i in range(self.NUM_DOF):
                 name = self.sim_dof_names[i]
                 if re.search(joint_name_expr, name):
                     self.default_dof_pos[i] = joint_pos
-        self.p_gains = np.zeros(self.NUM_DOF)
-        self.d_gains = np.zeros(self.NUM_DOF)
+        self.p_gains = np.zeros(self.NUM_DOF, dtype=np.float32)
+        self.d_gains = np.zeros(self.NUM_DOF, dtype=np.float32)
         for actuator_name, actuator_config in self.cfg["scene"]["robot"]["actuators"].items():
             assert "PDActuator" in actuator_config["class_type"], \
                 "Only PDActuator trained model is supported for now. Get {} in actuator {}".format(actuator_config["class_type"], actuator_name)
@@ -325,8 +325,8 @@ class UnitreeRos2Real(Node):
                             self.default_dof_pos[i] = action_config["offset"][joint_name_expr]
                         else:
                             self.default_dof_pos[i] = action_config["offset"]            
-        self.actions_raw = np.zeros(self.NUM_ACTIONS)
-        self.actions = np.zeros(self.NUM_ACTIONS)
+        self.actions_raw = np.zeros(self.NUM_ACTIONS, dtype=np.float32)
+        self.actions = np.zeros(self.NUM_ACTIONS, dtype=np.float32)
 
         # hardware related, in simulation order
         self.joint_limits_high = getattr(RobotCfgs, self.robot_class_name).joint_limits_high
@@ -433,7 +433,7 @@ class UnitreeRos2Real(Node):
                 vy = vy * (self.cmd_ny_range[1] - self.cmd_ny_range[0]) - self.cmd_ny_range[0]
             else:
                 vy = 0
-            self.xyyaw_command = np.array([vx, vy, yaw])
+            self.xyyaw_command = np.array([vx, vy, yaw], dtype=np.float32)
 
         # refer to Unitree Remote Control data structure, msg.keys is a bit mask
         # 00000000 00000001 means pressing the 0-th button (R1)
@@ -456,10 +456,10 @@ class UnitreeRos2Real(Node):
     """
 
     def _get_lin_vel_obs(self):
-        return np.zeros(3)
+        return np.zeros(3, dtype=np.float32)
     
     def _get_ang_vel_obs(self):
-        return self.low_state_buffer.imu_state.gyroscope
+        return np.array(self.low_state_buffer.imu_state.gyroscope, dtype=np.float32)
 
     def _get_projected_gravity_obs(self):
         quat_wxyz = np.quaternion(
@@ -471,7 +471,7 @@ class UnitreeRos2Real(Node):
         return quat_rotate_inverse(
             quat_wxyz,
             self.gravity_vec,
-        )
+        ).astype(np.float32)
 
     def _get_commands_obs(self):
         return self.xyyaw_command
