@@ -245,8 +245,7 @@ class G1Node(UnitreeRos2Real):
                 None, {actor_input_name: proprioception_obs},
             )[0]
 
-        # self.send_action(actions)
-
+        self.send_action(actions[0])
 
 def load_onnx_sessions(model_dir: str) -> dict[str, ort.InferenceSession]:
     """ Load the ONNX model from the given directory.
@@ -288,19 +287,19 @@ def main(args):
         model_device=torch.device("mps") if args.runon == "mac" else torch.device("cuda" if torch.cuda.is_available() else "cpu"),
     )
     node.register_network(onnx_sessions)
-    # node.start_ros_handlers()
 
-    # # start the main loop and let the ROS2 spins
-    # rclpy.spin(node)
-    # rclpy.shutdown()
+    # start the ros handlers and let the ROS2 spins
+    node.start_ros_handlers()
+    rclpy.spin(node)
+    rclpy.shutdown()
 
     # # some testing code. do not run this when deploying the robot.
-    if True:
+    if False:
         import time
         for loop_idx in range(1001):
             if loop_idx == 1: start_time = time.time()
             node._robot_forward_kinematics_callback()
-            # node.main_loop()
+            node.main_loop()
         end_time = time.time()
         print("Time elapsed: ", end_time - start_time)
         print("Average time: ", (end_time - start_time) / 1000)
