@@ -86,7 +86,7 @@ class G1Node(UnitreeRos2Real):
         self.current_state_motion_ref[self.motion_ref_term_slices["pose_ref_mask"]] = 1.0
         self.current_state_motion_ref[self.motion_ref_term_slices["dof_pos_mask"]] = 1.0
         self.current_state_motion_ref[self.motion_ref_term_slices["link_ref_mask"]] = 1.0
-        self.motion_ref_refreshed_time = None
+        self.motion_ref_refreshed_time = self.get_clock().now()
         self.time_to_target_when_refreshed = np.zeros(
             self.cfg["scene"]["motion_reference"]["num_frames"] if self.default_motion_ref_length is None \
                 else self.default_motion_ref_length,

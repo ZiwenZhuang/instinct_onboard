@@ -13,6 +13,7 @@ from unitree_go.msg import WirelessController
 from std_msgs.msg import Float32MultiArray
 # sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 from crc_module import get_crc
+import robot_cfgs
 
 from multiprocessing import Process
 from collections import OrderedDict
@@ -58,131 +59,6 @@ def quat_rotate_inverse(q: np.quaternion, v: np.array):
     q_inv = q.conjugate()
     return quaternion.rotate_vectors(q_inv, v)
 
-class RobotCfgs:
-    class G1_29Dof:
-        NUM_DOF = 29
-        NUM_ACTIONS = 29
-        dof_map = [ # dof_map[sim_idx] == real_idx
-            # You may check the consistency with `sim_dof_names` and `real_dof_names`
-            15, 22, # shoulder pitch
-            14, # waist pitch
-            16, 23, # shoulder roll
-            13, # waist roll
-            17, 24, # shoulder yaw
-            12, # waist yaw
-            18, 25, # elbow
-            0, 6, # hip pitch
-            19, 26, # wrist roll
-            1, 7, # hip roll
-            20, 27, # wrist pitch
-            2, 8, # hip yaw
-            21, 28, # wrist yaw
-            3, 9, # knee
-            4, 10, # ankle pitch
-            5, 11, # ankle roll
-        ]
-        sim_dof_names = [ # NOTE: order matters. This list is the order in simulation.
-            'left_shoulder_pitch_joint', #
-            'right_shoulder_pitch_joint',
-            'waist_pitch_joint',
-            'left_shoulder_roll_joint', #
-            'right_shoulder_roll_joint',
-            'waist_roll_joint',
-            'left_shoulder_yaw_joint', #
-            'right_shoulder_yaw_joint',
-            'waist_yaw_joint',
-            'left_elbow_joint', #
-            'right_elbow_joint',
-            'left_hip_pitch_joint',
-            'right_hip_pitch_joint',
-            'left_wrist_roll_joint',
-            'right_wrist_roll_joint',
-            'left_hip_roll_joint', #
-            'right_hip_roll_joint',
-            'left_wrist_pitch_joint',
-            'right_wrist_pitch_joint',
-            'left_hip_yaw_joint',
-            'right_hip_yaw_joint',
-            'left_wrist_yaw_joint', #
-            'right_wrist_yaw_joint',
-            'left_knee_joint',
-            'right_knee_joint',
-            'left_ankle_pitch_joint', #
-            'right_ankle_pitch_joint',
-            'left_ankle_roll_joint',
-            'right_ankle_roll_joint',
-        ]
-        real_dof_names = [ # NOTE: order matters. This list is the order in real robot.
-            'left_hip_pitch_joint',
-            'left_hip_roll_joint',
-            'left_hip_yaw_joint',
-            'left_knee_joint',
-            'left_ankle_pitch_joint',
-            'left_ankle_roll_joint',
-            'right_hip_pitch_joint',
-            'right_hip_roll_joint',
-            'right_hip_yaw_joint',
-            'right_knee_joint',
-            'right_ankle_pitch_joint',
-            'right_ankle_roll_joint',
-            'waist_yaw_joint',
-            'waist_roll_joint',
-            'waist_pitch_joint',
-            'left_shoulder_pitch_joint',
-            'left_shoulder_roll_joint',
-            'left_shoulder_yaw_joint',
-            'left_elbow_joint',
-            'left_wrist_roll_joint',
-            'left_wrist_pitch_joint',
-            'left_wrist_yaw_joint',
-            'right_shoulder_pitch_joint',
-            'right_shoulder_roll_joint',
-            'right_shoulder_yaw_joint',
-            'right_elbow_joint',
-            'right_wrist_roll_joint',
-            'right_wrist_pitch_joint',
-            'right_wrist_yaw_joint',
-        ]
-        dof_signs = [ # in simulation order
-            1, 1, -1,
-            1, 1, -1,
-            1, 1, -1,
-            1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
-        ]
-        joint_limits_high = np.array([ # in simulation order
-            2.6704, 2.6704, 0.5200,
-            2.2515, 1.5882, 0.5200,
-            2.6180, 2.6180, 2.6180,
-            2.0944, 2.0944, 2.8798, 2.8798, 1.9722, 1.9722,
-            2.9671, 0.5236, 1.6144, 1.6144, 2.7576, 2.7576,
-            1.6144, 1.6144, 2.8798, 2.8798,
-            0.5236, 0.5236, 0.2618, 0.2618,
-        ])
-        joint_limits_low = np.array([ # in simulation order
-            -3.0892, -3.0892, -0.5200,
-            -1.5882, -2.2515, -0.5200,
-            -2.6180, -2.6180, -2.6180,
-            -1.0472, -1.0472, -2.5307, -2.5307, -1.9722, -1.9722,
-            -0.5236, -2.9671, -1.6144, -1.6144, -2.7576, -2.7576,
-            -1.6144, -1.6144, -0.0873, -0.0873,
-            -0.8727, -0.8727, -0.2618, -0.2618,
-        ])
-        torque_limits = np.array([ # in simulation order
-            25, 25, 50,
-            25, 25, 50,
-            25, 25, 88,
-            25, 25, 88, 88, 25, 25,
-            88, 88, 5, 5, 88, 88,
-            5, 5, 139, 139,
-            50, 50, 50, 50,
-        ])
-        turn_on_motor_mode = [0x01] * 29
-        mode_pr = 0
-        """ please check this value from
-            https://support.unitree.com/home/zh/G1_developer/basic_services_interface
-            https://github.com/unitreerobotics/unitree_ros/tree/master/robots/g1_description
-        """
-
 class UnitreeRos2Real(Node):
     """ A proxy implementation of the real G1 robot.
     NOTE: different from go2 version, this class process all data in non-batchwise way.
@@ -225,8 +101,8 @@ class UnitreeRos2Real(Node):
             dryrun= True, # if True, the robot will not send commands to the real robot
         ):
         super().__init__("unitree_ros2_real")
-        self.NUM_DOF = getattr(RobotCfgs, robot_class_name).NUM_DOF
-        self.NUM_ACTIONS = getattr(RobotCfgs, robot_class_name).NUM_ACTIONS
+        self.NUM_DOF = getattr(robot_cfgs, robot_class_name).NUM_DOF
+        self.NUM_ACTIONS = getattr(robot_cfgs, robot_class_name).NUM_ACTIONS
         self.low_state_topic = low_state_topic
         # Generate a unique cmd topic so that the low_cmd will not send to the robot's motor.
         self.low_cmd_topic = low_cmd_topic if not dryrun else low_cmd_topic + "_dryrun_" + str(np.random.randint(0, 65535))
@@ -246,12 +122,12 @@ class UnitreeRos2Real(Node):
         self.robot_class_name = robot_class_name
         self.dryrun = dryrun
 
-        self.dof_map = getattr(RobotCfgs, robot_class_name).dof_map
-        self.sim_dof_names = getattr(RobotCfgs, robot_class_name).sim_dof_names
-        self.real_dof_names = getattr(RobotCfgs, robot_class_name).real_dof_names
-        self.dof_signs = getattr(RobotCfgs, robot_class_name).dof_signs
-        self.turn_on_motor_mode = getattr(RobotCfgs, robot_class_name).turn_on_motor_mode
-        self.mode_pr = getattr(RobotCfgs, robot_class_name).mode_pr
+        self.dof_map = getattr(robot_cfgs, robot_class_name).dof_map
+        self.sim_dof_names = getattr(robot_cfgs, robot_class_name).sim_dof_names
+        self.real_dof_names = getattr(robot_cfgs, robot_class_name).real_dof_names
+        self.dof_signs = getattr(robot_cfgs, robot_class_name).dof_signs
+        self.turn_on_motor_mode = getattr(robot_cfgs, robot_class_name).turn_on_motor_mode
+        self.mode_pr = getattr(robot_cfgs, robot_class_name).mode_pr
 
         self.parse_config()
 
@@ -302,7 +178,7 @@ class UnitreeRos2Real(Node):
                         else:
                             self.d_gains[i] = actuator_config["damping"]
                         # print(f"Joint {i}({self.sim_dof_names[i]}) has p_gain {self.p_gains[i]} and d_gain {self.d_gains[i]}")
-        self.torque_limits = getattr(RobotCfgs, self.robot_class_name).torque_limits
+        self.torque_limits = getattr(robot_cfgs, self.robot_class_name).torque_limits
         
         # buffers for observation output (in simulation order)
         self.dof_pos_ = np.zeros(self.NUM_DOF, dtype=np.float32) # in robot urdf coordinate, but in simulation order. no offset substracted
@@ -329,8 +205,8 @@ class UnitreeRos2Real(Node):
         self.actions = np.zeros(self.NUM_ACTIONS, dtype=np.float32)
 
         # hardware related, in simulation order
-        self.joint_limits_high = getattr(RobotCfgs, self.robot_class_name).joint_limits_high
-        self.joint_limits_low = getattr(RobotCfgs, self.robot_class_name).joint_limits_low
+        self.joint_limits_high = getattr(robot_cfgs, self.robot_class_name).joint_limits_high
+        self.joint_limits_low = getattr(robot_cfgs, self.robot_class_name).joint_limits_low
         joint_pos_mid = (self.joint_limits_high + self.joint_limits_low) / 2
         joint_pos_range = (self.joint_limits_high - self.joint_limits_low) / 2
         self.joint_pos_protect_high = joint_pos_mid + joint_pos_range * self.dof_pos_protect_ratio

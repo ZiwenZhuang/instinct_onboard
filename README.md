@@ -1,13 +1,14 @@
 # Instinct G1
 
+## Jetson
 The code for running network onboard of Unitree G1's Jetson Orin NX
 
-## Prerequisites
+### Prerequisites
 - Ubuntu 20.04
 - ROS2 Foxy
 - unitree_hg ros messages
 
-## Installation
+### Installation
 1. JetPack
 ```bash
 sudo apt-get update
@@ -22,8 +23,9 @@ source instinct_venv/bin/activate
 ```
 
 3. Install crc module
+Follow the instruction of [crc_module](https://github.com)
 
 4. Some onboard python packages through pip
 ```bash
-pip install pytorch_kinematics numpy-quaternion numpy==1.20.1
+pip install numpy-quaternion numpy==1.24.4 transformations==2022.9.26
 ```
