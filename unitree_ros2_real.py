@@ -10,7 +10,7 @@ from unitree_hg.msg import (
     # MotorCmd,
 )
 from unitree_go.msg import WirelessController
-from std_msgs.msg import Float32MultiArray
+from std_msgs.msg import String, Float32MultiArray
 # sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 from crc_module import get_crc
 import robot_cfgs
@@ -96,7 +96,9 @@ class UnitreeRos2Real(Node):
             cmd_nyaw_range= [0.4, 1.6], # check joy_stick_callback (p for positive, n for negative)
             move_by_wireless_remote= False, # if True, the robot will be controlled by a wireless remote
             computer_clip_torque= True, # if True, the actions will be clipped by torque limits
-            dof_pos_protect_ratio= 1.01, # if the dof_pos is out of the range of this ratio, the process will shutdown.
+            dof_pos_protect_ratio= 1.1, # if the dof_pos is out of the range of this ratio, the process will shutdown.
+            kp_factor= 1.0, # the factor to multiply the p_gain
+            kd_factor= 1.0, # the factor to multiply the d_gain
             robot_class_name= "G1_29Dof",
             dryrun= True, # if True, the robot will not send commands to the real robot
         ):
@@ -119,6 +121,8 @@ class UnitreeRos2Real(Node):
         self.move_by_wireless_remote = move_by_wireless_remote
         self.computer_clip_torque = computer_clip_torque
         self.dof_pos_protect_ratio = dof_pos_protect_ratio
+        self.kp_factor = kp_factor
+        self.kd_factor = kd_factor
         self.robot_class_name = robot_class_name
         self.dryrun = dryrun
 
@@ -178,6 +182,10 @@ class UnitreeRos2Real(Node):
                         else:
                             self.d_gains[i] = actuator_config["damping"]
                         # print(f"Joint {i}({self.sim_dof_names[i]}) has p_gain {self.p_gains[i]} and d_gain {self.d_gains[i]}")
+        self.p_gains *= self.kp_factor
+        self.d_gains *= self.kd_factor
+        self.get_logger().info("PD gains are set to: p_gains: {}, d_gains: {}".format(self.p_gains, self.d_gains))
+        self.get_logger().info("PD gains are set by kp_factor: {}, kd_factor: {}".format(self.kp_factor, self.kd_factor))
         self.torque_limits = getattr(robot_cfgs, self.robot_class_name).torque_limits
         
         # buffers for observation output (in simulation order)
@@ -217,6 +225,16 @@ class UnitreeRos2Real(Node):
         """
 
         # ROS publishers
+        self.debug_msg_publisher = self.create_publisher(
+            String,
+            "/debug_msg",
+            1
+        )
+        self.action_publisher = self.create_publisher(
+            Float32MultiArray,
+            "/raw_actions",
+            1
+        )
         self.low_cmd_pub = self.create_publisher(
             LowCmd,
             self.low_cmd_topic,
@@ -239,6 +257,12 @@ class UnitreeRos2Real(Node):
             1
         )
 
+        self.debug_msg_publisher.publish(String(
+            data= f"ROS handlers starting, kp: {self.p_gains}, kd: {self.d_gains}, torque_limits: {self.torque_limits}"
+        ))
+        self.debug_msg_publisher.publish(String(
+            data= f"Using kp_factor: {self.kp_factor}, kd_factor: {self.kd_factor}"
+        ))
         self.get_logger().info("ROS handlers started, waiting to recieve critical low state and wireless controller messages.")
         if not self.dryrun:
             self.get_logger().warn(f"You are running the code in no-dryrun mode and publishing to '{self.low_cmd_topic}', Please keep safe.")
@@ -427,13 +451,20 @@ class UnitreeRos2Real(Node):
         just like env.step in simulation.
         Thus, the actions has the batch dimension, whose size is 1.
         """
+        self.action_publisher.publish(Float32MultiArray(data= actions))
         if self.computer_clip_torque:
             clipped_scaled_action = self.clip_by_torque_limit(actions * self.actions_scale)
+            clipped_joints = np.where(clipped_scaled_action != actions * self.actions_scale)[0]
+            if len(clipped_joints) > 0:
+                self.get_logger().warn(f"Computer Clip Torque is True, the following joints are clipped: {clipped_joints}", throttle_duration_sec= 5)
+                self.debug_msg_publisher.publish(String(data= f"Computer Clip Torque is True, the following joints are clipped: {clipped_joints}"))
         else:
             self.get_logger().warn("Computer Clip Torque is False, the robot may be damaged.", throttle_duration_sec= 5)
             clipped_scaled_action = actions * self.actions_scale
         robot_coordinates_action = clipped_scaled_action + self.default_dof_pos
-
+        if np.isnan(actions).any():
+            self.get_logger().error("Actions contain NaN, Skip sending the action to the robot.")
+            return
         self._publish_legs_cmd(robot_coordinates_action)
 
     """
