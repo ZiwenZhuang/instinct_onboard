@@ -1,4 +1,5 @@
 
+import numpy as np
 """A general configuration file for the robots, shared between different scripts. """
 
 class G1_29Dof:
@@ -84,13 +85,13 @@ class G1_29Dof:
         'right_wrist_pitch_joint',
         'right_wrist_yaw_joint',
     ]
-    dof_signs = [
+    dof_signs = np.array([
         1, 1, -1,
         1, 1, -1,
         1, 1, -1,
         1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
-    ]
-    joint_limits_high = [
+    ], dtype=np.float32)
+    joint_limits_high = np.array([
         2.6704, 2.6704, 0.5200,
         2.2515, 1.5882, 0.5200,
         2.6180, 2.6180, 2.6180,
@@ -98,8 +99,8 @@ class G1_29Dof:
         2.9671, 0.5236, 1.6144, 1.6144, 2.7576, 2.7576,
         1.6144, 1.6144, 2.8798, 2.8798,
         0.5236, 0.5236, 0.2618, 0.2618,
-    ]
-    joint_limits_low = [
+    ], dtype=np.float32)
+    joint_limits_low = np.array([
         -3.0892, -3.0892, -0.5200,
         -1.5882, -2.2515, -0.5200,
         -2.6180, -2.6180, -2.6180,
@@ -107,8 +108,8 @@ class G1_29Dof:
         -0.5236, -2.9671, -1.6144, -1.6144, -2.7576, -2.7576,
         -1.6144, -1.6144, -0.0873, -0.0873,
         -0.8727, -0.8727, -0.2618, -0.2618,
-    ]
-    torque_limits = [ # from urdf and in simulation order
+    ], dtype=np.float32)
+    torque_limits = np.array([ # from urdf and in simulation order
         25, 25, 50,
         25, 25, 50,
         25, 25, 88,
@@ -116,7 +117,7 @@ class G1_29Dof:
         88, 88, 5, 5, 88, 88,
         5, 5, 139, 139,
         50, 50, 50, 50,
-    ]
+    ], dtype=np.float32)
     turn_on_motor_mode = [0x01] * 29
     mode_pr = 0
     mode_machine = 5
