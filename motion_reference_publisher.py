@@ -42,7 +42,7 @@ class MotionReferencePublisher(Node):
         )
 
         assert self.publish_a_frame(), "Failed to publish the first frame"
-        self.prev_rosbag_publish_time = self.rosbag_publish_time
+        self.prev_rosbag_msg_time = self.rosbag_msg_time
 
         if args.debug_vis:
             self.joint_state_msg = JointState()
@@ -53,24 +53,28 @@ class MotionReferencePublisher(Node):
             )
             self.tf_broadcaster = TransformBroadcaster(self)
 
+            # publish the debug vis once
+            self.show_robot_reference_callback()
             # start the debug timeer
             self.debug_vis_timer = self.create_timer(
-                0.02,
+                0.01,
                 self.show_robot_reference_callback,
             )
 
-        print("First frame published, wait for hitting Enter to continue publishing...")
+    async def motion_reference_publish(self):
+        self.get_logger().info("First frame published, publisher system launched, wait for hitting Enter to continue publishing...")
         user_cmd = input()
         if user_cmd == "q":
             self.get_logger().info("User Cancelled.")
-            raise SystemExit()
+            rclpy.shutdown()
+            return
 
-    async def motion_reference_publish(self):
         while self.publish_a_frame() and rclpy.ok():
-            duration = self.rosbag_publish_time - self.prev_rosbag_publish_time
+            duration = self.rosbag_msg_time - self.prev_rosbag_msg_time
             sleep_time_f = (duration).nanoseconds / 1e9
             await asyncio.sleep(sleep_time_f)
-            self.prev_rosbag_publish_time = self.rosbag_publish_time
+            self.prev_rosbag_msg_time = self.rosbag_msg_time
+        
         self.get_logger().info("Finished publishing all frames")
         rclpy.shutdown()
 
@@ -81,9 +85,9 @@ class MotionReferencePublisher(Node):
             # Get the rosbag time using timestamp or header.stamp
             if False:
                 timestamp_sec = int(timestamp / 1e9); timestamp_nsec = int(timestamp % 1e9)
-                self.rosbag_publish_time = rclpy.time.Time(seconds=timestamp_sec, nanoseconds=timestamp_nsec)
+                self.rosbag_msg_time = rclpy.time.Time(seconds=timestamp_sec, nanoseconds=timestamp_nsec)
             else:
-                self.rosbag_publish_time = rclpy.time.Time.from_msg(msg.header.stamp)
+                self.rosbag_msg_time = rclpy.time.Time.from_msg(msg.header.stamp)
             # update the real pulish time.
             self.msg_publish_time = self.get_clock().now()
 
@@ -91,7 +95,7 @@ class MotionReferencePublisher(Node):
             msg.header.stamp = self.msg_publish_time.to_msg()
             self.motion_reference_msg = msg
             self.motion_reference_pub.publish(msg)
-            self.get_logger().info("Published motion reference message at " + str(self.msg_publish_time))
+            self.get_logger().info("Published motion reference message at {:.3f}s".format(self.msg_publish_time.nanoseconds / 1e9))
             return True
         else:
             self.get_logger().info("No more messages to publish")
@@ -114,7 +118,9 @@ class MotionReferencePublisher(Node):
         
     def show_robot_reference_callback(self):
         """ update as a timer. """
-        if not hasattr(self, "recieved_time"): return
+        # if self.msg_publish_time is None:
+        #     self.get_logger().info("No motion reference message published yet")
+        #     return
 
         current_time = self.get_clock().now()
         time_passed_from_motion_reference = current_time - self.msg_publish_time
