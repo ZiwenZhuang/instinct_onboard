@@ -99,6 +99,7 @@ class UnitreeRos2Real(Node):
             dof_pos_protect_ratio= 1.1, # if the dof_pos is out of the range of this ratio, the process will shutdown.
             kp_factor= 1.0, # the factor to multiply the p_gain
             kd_factor= 1.0, # the factor to multiply the d_gain
+            torque_limits_ratio= 1.0, # the factor to multiply the torque limits
             robot_class_name= "G1_29Dof",
             dryrun= True, # if True, the robot will not send commands to the real robot
         ):
@@ -123,6 +124,7 @@ class UnitreeRos2Real(Node):
         self.dof_pos_protect_ratio = dof_pos_protect_ratio
         self.kp_factor = kp_factor
         self.kd_factor = kd_factor
+        self.torque_limits_ratio = torque_limits_ratio
         self.robot_class_name = robot_class_name
         self.dryrun = dryrun
 
@@ -186,7 +188,8 @@ class UnitreeRos2Real(Node):
         self.d_gains *= self.kd_factor
         self.get_logger().info("PD gains are set to: p_gains: {}, d_gains: {}".format(self.p_gains, self.d_gains))
         self.get_logger().info("PD gains are set by kp_factor: {}, kd_factor: {}".format(self.kp_factor, self.kd_factor))
-        self.torque_limits = getattr(robot_cfgs, self.robot_class_name).torque_limits
+        self.torque_limits = getattr(robot_cfgs, self.robot_class_name).torque_limits * self.torque_limits_ratio
+        self.get_logger().info("Torque limits are set by ratio of : {}".format(self.torque_limits_ratio))
         
         # buffers for observation output (in simulation order)
         self.dof_pos_ = np.zeros(self.NUM_DOF, dtype=np.float32) # in robot urdf coordinate, but in simulation order. no offset substracted
@@ -261,7 +264,7 @@ class UnitreeRos2Real(Node):
             data= f"ROS handlers starting, kp: {self.p_gains}, kd: {self.d_gains}, torque_limits: {self.torque_limits}"
         ))
         self.debug_msg_publisher.publish(String(
-            data= f"Using kp_factor: {self.kp_factor}, kd_factor: {self.kd_factor}"
+            data= f"Using kp_factor: {self.kp_factor}, kd_factor: {self.kd_factor}, torque_limits_ratio: {self.torque_limits_ratio}"
         ))
         self.get_logger().info("ROS handlers started, waiting to recieve critical low state and wireless controller messages.")
         if not self.dryrun:
@@ -296,6 +299,7 @@ class UnitreeRos2Real(Node):
             if self.dof_pos_[sim_idx] > self.joint_pos_protect_high[sim_idx] or \
                 self.dof_pos_[sim_idx] < self.joint_pos_protect_low[sim_idx]:
                 self.get_logger().error(f"Joint {sim_idx}(sim), {real_idx}(real) position out of range at {self.low_state_buffer.motor_state[real_idx].q}")
+                self.debug_msg_publisher.publish(String(data= f"Joint {sim_idx}(sim), {real_idx}(real) position out of range at {self.low_state_buffer.motor_state[real_idx].q}"))
                 self.get_logger().error("The motors and this process shuts down.")
                 self._turn_off_motors()
                 raise SystemExit()
@@ -486,6 +490,10 @@ class UnitreeRos2Real(Node):
             self.low_cmd_buffer.motor_cmd[real_idx].kd = self.d_gains[sim_idx].item()
         
         self.low_cmd_buffer.crc = get_crc(self.low_cmd_buffer)
+        if np.isnan(robot_coordinates_action).any():
+            self.get_logger().error("Robot coordinates action contain NaN, Skip sending the action to the robot.", throttle_duration_sec= 2)
+            self.debug_msg_publisher.publish(String(data= "Robot coordinates action contain NaN, Skip sending the action to the robot."))
+            return
         self.low_cmd_pub.publish(self.low_cmd_buffer)
 
     def _turn_off_motors(self):

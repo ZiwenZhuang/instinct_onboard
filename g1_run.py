@@ -381,6 +381,7 @@ def main(args):
         model_device=torch.device("mps") if args.runon == "mac" else torch.device("cuda" if torch.cuda.is_available() else "cpu"),
         kp_factor=args.kp_factor,
         kd_factor=args.kd_factor,
+        torque_limits_ratio=args.torque_limits_ratio,
         dryrun=not args.nodryrun,
     )
     node.register_network(onnx_sessions)
@@ -410,6 +411,7 @@ if __name__ == "__main__":
     parser.add_argument("--link_idx", type= int, default= None, help= "The link index to viusalize the transfrom (computed by forward_kinematics ONNXProgram)")
     parser.add_argument("--kp_factor", type= float, default= 1.0, help= "The factor to scale the kp term")
     parser.add_argument("--kd_factor", type= float, default= 1.0, help= "The factor to scale the kd term")
+    parser.add_argument("--torque_limits_ratio", type= float, default= 1.0, help= "The factor to scale the torque limits")
     parser.add_argument("--runon", type= str, choices= ["mac", "thinkpad", "jetson", None], default= None, help= "The machine running the code")
     parser.add_argument("--nodryrun", action= "store_true", default= False, help= "Disable dryrun mode")
 
