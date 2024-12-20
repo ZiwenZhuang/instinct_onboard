@@ -138,7 +138,9 @@ class G1Node(UnitreeRos2Real):
 
     def _motion_reference_callback(self, msg: MotionReference):
         # update the motion reference buffer
-        self.motion_ref_refreshed_time = rosTime.from_msg(msg.header.stamp)
+        # NOTE: DONT use time from message, use the current time becuause the msg.header.stamp might
+        # come from another machine, which is not synchronized with the current machine.
+        self.motion_ref_refreshed_time = self.get_clock().now()
         self.get_logger().info("motion reference received", once=True)
         for frame_idx, motion_frame in enumerate(msg.data):
             if frame_idx >= self.motion_ref_buffer.shape[0]:
@@ -202,6 +204,7 @@ class G1Node(UnitreeRos2Real):
     
     def _get_proprioception_obs(self, nolinvel: bool = True):
         """ Get the proprioception observation terms.
+        NOTE: Currently when getting proprioception, obs clip is not implemented.
         Args:
             nolinvel: If True, the linear velocity will be ignored.
         Returns:
@@ -209,12 +212,14 @@ class G1Node(UnitreeRos2Real):
         """
         obs = []
         if not nolinvel:
-            obs.append(self._get_lin_vel_obs())
-        obs.append(self._get_ang_vel_obs())
-        obs.append(self._get_projected_gravity_obs())
-        obs.append(self._get_dof_pos_obs())
-        obs.append(self._get_dof_vel_obs())
-        obs.append(self._get_last_actions_obs())
+            obs.append(self._get_lin_vel_obs() * self.obs_scales.get("base_lin_vel", 1.0))
+        # NOTE!!! the observation names in training config file might be different from the names in
+        # this node system. So, you should check the names in the training config file.
+        obs.append(self._get_ang_vel_obs() * self.obs_scales.get("base_ang_vel", 1.0))
+        obs.append(self._get_projected_gravity_obs() * self.obs_scales.get("projected_gravity", 1.0))
+        obs.append(self._get_dof_pos_obs() * self.obs_scales.get("joint_pos", 1.0))
+        obs.append(self._get_dof_vel_obs() * self.obs_scales.get("joint_vel", 1.0))
+        obs.append(self._get_last_actions_obs() * self.obs_scales.get("last_action", 1.0))
         return np.concatenate(obs, axis= 0)
 
     """
@@ -327,6 +332,9 @@ class G1Node(UnitreeRos2Real):
             elif self.run_stage == "startup":
                 self.run_stage = "policy"
                 self.get_logger().info("Switched to policy stage.", throttle_duration_sec= 0.2)
+                # set the motion reference refreshed time to the current time to prevent the policy from
+                # being too laggy w.r.t motion reference target time.
+                self.motion_ref_refreshed_time = self.get_clock().now()
             else:
                 self.get_logger().warn(
                     "Should switch to startup stage before the policy runs. No switching. Current stage: " + self.run_stage,
