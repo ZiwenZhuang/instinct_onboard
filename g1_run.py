@@ -6,6 +6,7 @@ import rclpy
 from rclpy.node import Node
 from rclpy.time import Time as rosTime
 
+from std_msgs.msg import String
 from tf2_ros import TransformBroadcaster
 from geometry_msgs.msg import TransformStamped
 from motion_reference_msgs.msg import MotionReference
@@ -23,7 +24,7 @@ class G1Node(UnitreeRos2Real):
             interested_link_idx: int = None, # the link index to visualize the transform
             forward_kinematics_freq: float = 100., # the frequency of forward kinematics computation
             default_motion_ref_length: int = None, # if given, override the value from env.yaml and ignore exceeding input.
-            startup_step_size: float = 0.1, # the step size during startup stage
+            startup_step_size: float = 0.2, # the step size during startup stage
             wait_until_motion_ref_received: bool = True, # if True, the node will wait until the motion reference is received.
             model_device: torch.device = torch.device("cuda" if torch.cuda.is_available() else "cpu"),
             **kwargs,
@@ -185,7 +186,7 @@ class G1Node(UnitreeRos2Real):
         """
         # update time and local errors (pose depends on odometry, which is not updated here)
         time = self.get_clock().now() - self.motion_ref_refreshed_time
-        time_passed_from_refreshed = time.nanoseconds / 1e-9
+        time_passed_from_refreshed = time.nanoseconds / 1e9
         self.motion_ref_buffer[:, self.motion_ref_term_slices["time_to_target"]] = (self.time_to_target_when_refreshed - time_passed_from_refreshed)[:, None]
         self.motion_ref_buffer[:, self.motion_ref_term_slices["time_from_ref_update"]] = time_passed_from_refreshed
 
@@ -196,6 +197,10 @@ class G1Node(UnitreeRos2Real):
         # update the current state as pseudo-motion reference
         self.current_state_motion_ref[self.motion_ref_term_slices["dof_pos_ref"]] = self._get_dof_pos_obs()
         self.current_state_motion_ref[self.motion_ref_term_slices["link_pos_ref"]] = self._interested_link_pos_b.flatten()
+
+        if (self.time_to_target_when_refreshed < time_passed_from_refreshed).all() and self.run_stage == "policy":
+            self.get_logger().warn("Onboard Motion Reference is exhausted.")
+            self.debug_msg_publisher.publish(String(data="Onboard Motion Reference is exhausted."))
         
         return np.concatenate([
             self.motion_ref_buffer,
@@ -243,7 +248,7 @@ class G1Node(UnitreeRos2Real):
         )
 
         main_loop_duration = self.cfg["sim"]["dt"] * self.cfg["decimation"]
-        print("Starting main loop with duration: ", main_loop_duration)
+        self.get_logger().info("Starting main loop with duration: {:3f}".format(main_loop_duration))
         self.main_loop_timer = self.create_timer(main_loop_duration, self.main_loop)
 
     def register_network(self, onnx_sessions: dict):

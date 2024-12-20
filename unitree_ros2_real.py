@@ -96,7 +96,7 @@ class UnitreeRos2Real(Node):
             cmd_nyaw_range= [0.4, 1.6], # check joy_stick_callback (p for positive, n for negative)
             move_by_wireless_remote= False, # if True, the robot will be controlled by a wireless remote
             computer_clip_torque= True, # if True, the actions will be clipped by torque limits
-            dof_pos_protect_ratio= 1.1, # if the dof_pos is out of the range of this ratio, the process will shutdown.
+            dof_pos_protect_ratio= 1.5, # if the dof_pos is out of the range of this ratio, the process will shutdown.
             kp_factor= 1.0, # the factor to multiply the p_gain
             kd_factor= 1.0, # the factor to multiply the d_gain
             torque_limits_ratio= 1.0, # the factor to multiply the torque limits
@@ -483,7 +483,7 @@ class UnitreeRos2Real(Node):
             real_idx = self.dof_map[sim_idx]
             if not self.dryrun:
                 self.low_cmd_buffer.motor_cmd[real_idx].mode = self.turn_on_motor_mode[sim_idx]
-            self.low_cmd_buffer.motor_cmd[real_idx].q = robot_coordinates_action[sim_idx].item() * self.dof_signs[sim_idx]
+            self.low_cmd_buffer.motor_cmd[real_idx].q = (robot_coordinates_action[sim_idx] * self.dof_signs[sim_idx]).item()
             self.low_cmd_buffer.motor_cmd[real_idx].dq = 0.
             self.low_cmd_buffer.motor_cmd[real_idx].tau = 0.
             self.low_cmd_buffer.motor_cmd[real_idx].kp = self.p_gains[sim_idx].item()
