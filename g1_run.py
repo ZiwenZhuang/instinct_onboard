@@ -191,7 +191,7 @@ class G1Node(UnitreeRos2Real):
         self.motion_ref_buffer[:, self.motion_ref_term_slices["time_from_ref_update"]] = time_passed_from_refreshed
 
         # update the motion reference buffer in the error terms
-        self.motion_ref_buffer[:, self.motion_ref_term_slices["dof_pos_err_ref"]] = self.motion_ref_buffer[:, self.motion_ref_term_slices["dof_pos_ref"]] - self.dof_pos_[None, :]
+        self.motion_ref_buffer[:, self.motion_ref_term_slices["dof_pos_err_ref"]] = self.motion_ref_buffer[:, self.motion_ref_term_slices["dof_pos_ref"]] - self.dof_pos_[None, :] + self.default_dof_pos[None, :]
         self.motion_ref_buffer[:, self.motion_ref_term_slices["link_pos_err_ref"]] = self.motion_ref_buffer[:, self.motion_ref_term_slices["link_pos_ref"]] - self._interested_link_pos_b.flatten()[None, :]
 
         # update the current state as pseudo-motion reference
@@ -304,13 +304,13 @@ class G1Node(UnitreeRos2Real):
             err_large_mask = np.abs(dof_pos_err) > self.startup_step_size
             if not err_large_mask.any():
                 self.get_logger().info("Joint close to 0-th frame of motion reference", throttle_duration_sec= 1)
-            dof_pos_cmd = np.where(
+            dof_pos_target = np.where(
                 err_large_mask,
-                self.dof_pos_ + np.sign(dof_pos_err) * self.startup_step_size,
+                self.dof_pos_ + np.sign(dof_pos_err) * self.startup_step_size - self.default_dof_pos,
                 dof_pos_target,
             )
             actions = np.expand_dims(
-                (dof_pos_cmd - self.default_dof_pos) / self.actions_scale,
+                dof_pos_target / self.actions_scale,
                 axis= 0,
             )
             self.send_action(actions[0])
