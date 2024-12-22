@@ -6,17 +6,53 @@ from rclpy.node import Node
 import rclpy.time
 import rosbag2_py
 from rclpy.serialization import deserialize_message
-from rosidl_runtime_py.utilities import get_message
+# from rosidl_runtime_py.utilities import get_message
 
 from tf2_ros import TransformBroadcaster
-from geometry_msgs.msg import TransformStamped
+from geometry_msgs.msg import TransformStamped, PoseArray
 from sensor_msgs.msg import JointState
+
+from unitree_hg.msg import LowState
 
 from motion_reference_msgs.msg import MotionReference, MotionFrame
 
 import numpy as np
-import quaternion
+import quaternion # from numpy-quaternion
 import robot_cfgs
+
+def normalize_quat(quat: quaternion) -> quaternion:
+    """Normalize the quaternion.
+
+    Args:
+        quat: The orientation in (w, x, y, z). Not Batched.
+
+    Returns:
+        A normalized quaternion.
+    """
+    quat = quat / np.linalg.norm(quaternion.as_float_array(quat)).clip(min=1e-6)
+    return quat
+
+def yaw_quat(quat: quaternion) -> quaternion:
+    """Extract the yaw component of a quaternion.
+
+    Args:
+        quat: The orientation in (w, x, y, z). Not Batched.
+
+    Returns:
+        A quaternion with only yaw component.
+    """
+    qw = quat.w
+    qx = quat.x
+    qy = quat.y
+    qz = quat.z
+    yaw = np.atan2(2 * (qw * qz + qx * qy), 1 - 2 * (qy * qy + qz * qz))
+    quat_yaw = np.zeros(4)
+    quat_yaw[3] = np.sin(yaw / 2)
+    quat_yaw[0] = np.cos(yaw / 2)
+    return normalize_quat(quaternion.as_quat_array(quat_yaw))
+
+def inv_quat(quat: quaternion) -> quaternion:
+    return normalize_quat(quat.conjugate())
 
 class MotionReferencePublisher(Node):
     """ Display the motion reference data for rviz visualization.
@@ -40,6 +76,21 @@ class MotionReferencePublisher(Node):
             "/motion_reference",
             1,
         )
+
+        self.low_state_sub = self.create_subscription(
+            LowState,
+            "/lowstate",
+            self.low_state_callback,
+            1,
+        )
+
+        # create some buffers incase the rosbag file is not in order
+        self._motion_reference_buffer = []
+        self._pose_w_buffer = []
+
+        # wait for low_state_buffer to be filled
+        while not hasattr(self, "low_state_buffer") and rclpy.ok():
+            rclpy.spin_once(self)
 
         assert self.publish_a_frame(), "Failed to publish the first frame"
         self.prev_rosbag_msg_time = self.rosbag_msg_time
@@ -79,22 +130,70 @@ class MotionReferencePublisher(Node):
         rclpy.shutdown()
 
     def publish_a_frame(self) -> bool:
-        msg = self.get_next_message()
-        if msg is not None:
-            topic, msg, timestamp = msg
+        msgs = self.pop_next_msg_frame()
+        if msgs is not None:
+            _, motion_reference_msg, _ = msgs[self.args.topic]
             # Get the rosbag time using timestamp or header.stamp
             if False:
                 timestamp_sec = int(timestamp / 1e9); timestamp_nsec = int(timestamp % 1e9)
                 self.rosbag_msg_time = rclpy.time.Time(seconds=timestamp_sec, nanoseconds=timestamp_nsec)
             else:
-                self.rosbag_msg_time = rclpy.time.Time.from_msg(msg.header.stamp)
+                self.rosbag_msg_time = rclpy.time.Time.from_msg(motion_reference_msg.header.stamp)
+
+            # update the pose reference based on robot's low state and global rotation reference
+            if hasattr(self, "low_state_buffer"):
+                _, pose_w_msg, _ = msgs[self.args.pose_w_topic]
+                pos_offset_w = np.array([[
+                    pose_w.position.x,
+                    pose_w.position.y,
+                    pose_w.position.z,
+                ] for pose_w in pose_w_msg.poses]) # (N, 3)
+                ref_quat_w = quaternion.as_quat_array(np.array([[
+                    pose_w.orientation.w,
+                    pose_w.orientation.x,
+                    pose_w.orientation.y,
+                    pose_w.orientation.z,
+                ] for pose_w in pose_w_msg.poses])) # (N, 4)
+                root_quat_w = quaternion.as_quat_array(np.array([
+                    self.low_state_buffer.imu_state.quaternion[0],
+                    self.low_state_buffer.imu_state.quaternion[1],
+                    self.low_state_buffer.imu_state.quaternion[2],
+                    self.low_state_buffer.imu_state.quaternion[3],
+                ])) # (4,)
+                root_quat_w_inv = inv_quat(root_quat_w)
+                if not hasattr(self, "match_heading_quat_w"):
+                    # The first frame, update the robot's heading
+                    root_heading_quat_w = yaw_quat(root_quat_w)
+                    ref_heading_quat_w = yaw_quat(ref_quat_w[0])
+                    self.match_heading_quat_w = normalize_quat(root_heading_quat_w * inv_quat(ref_heading_quat_w))
+                # update the heading based on the initial heading of the robot.
+                ref_quat_w = normalize_quat(self.match_heading_quat_w * ref_quat_w)
+                pos_offset_w = quaternion.rotate_vectors(
+                    self.match_heading_quat_w,
+                    pos_offset_w,
+                ) # (N, 3)
+                # compute the pose reference in base frame
+                pos_offset_b = quaternion.rotate_vectors(
+                    root_quat_w_inv,
+                    pos_offset_w,
+                ) # (N, 3)
+                quat_b = normalize_quat(root_quat_w_inv * ref_quat_w) # (N, 4)
+                axisang_b = quaternion.as_rotation_vector(quat_b) # (N, 3)
+                for frame_idx in range(len(motion_reference_msg.data)):
+                    motion_frame = motion_reference_msg.data[frame_idx]
+                    motion_frame.position.x = pos_offset_b[frame_idx, 0]
+                    motion_frame.position.y = pos_offset_b[frame_idx, 1]
+                    motion_frame.position.z = pos_offset_b[frame_idx, 2]
+                    motion_frame.axisangle.x = axisang_b[frame_idx, 0]
+                    motion_frame.axisangle.y = axisang_b[frame_idx, 1]
+                    motion_frame.axisangle.z = axisang_b[frame_idx, 2]
+                
             # update the real pulish time.
             self.msg_publish_time = self.get_clock().now()
-
             # update header timestamp
-            msg.header.stamp = self.msg_publish_time.to_msg()
-            self.motion_reference_msg = msg
-            self.motion_reference_pub.publish(msg)
+            motion_reference_msg.header.stamp = self.msg_publish_time.to_msg()
+            self.motion_reference_msg = motion_reference_msg
+            self.motion_reference_pub.publish(motion_reference_msg)
             self.get_logger().info("Published motion reference message at {:.3f}s".format(self.msg_publish_time.nanoseconds / 1e9))
             return True
         else:
@@ -102,19 +201,45 @@ class MotionReferencePublisher(Node):
             delattr(self, "bag_reader")
             return False
 
-    def get_next_message(self):
-        if self.bag_reader.has_next():
+    def pop_next_msg_frame(self):
+        msg_frame_flag = np.array([False, False]) # [motion_reference, pose_w]
+        # Only when both messages are collected, return the message.
+        while not msg_frame_flag.all() and self.bag_reader.has_next():
             topic, data, timestamp = self.bag_reader.read_next()
-            if not topic == self.args.topic:
-                self.get_logger().warn("Unexpected topic: %s", topic)
-                return None
             try:
-                msg = deserialize_message(data, MotionReference)
-                return topic, msg, timestamp
+                if topic == self.args.topic:
+                    msg = deserialize_message(data, MotionReference)
+                    self._motion_reference_buffer.append((topic, msg, timestamp))
+                    msg_frame_flag[0] = True
+                elif topic == self.args.pose_w_topic:
+                    msg = deserialize_message(data, PoseArray)
+                    self._pose_w_buffer.append((topic, msg, timestamp))
+                    msg_frame_flag[1] = True
+                else:
+                    self.get_logger().warn("Unexpected topic: " + str(topic))
+                    return None
             except Exception as e:
-                self.get_logger().error("Failed to deserialize message: %s", e)
+                self.get_logger().error("Failed to deserialize message: " + str(e))
                 return None
-        return None
+        if len(self._motion_reference_buffer) == 0 and len(self._pose_w_buffer) == 0:
+            # no more message to publish
+            return None
+        # check if both buffer has the same length and the same timestamp
+        # Maybe other cases could be handled, but for now, just accept the same length and timestamp.
+        if len(self._motion_reference_buffer) != len(self._pose_w_buffer):
+            self.get_logger().error("Buffer length mismatch: {:d} vs {:d}".format(len(self._motion_reference_buffer), len(self._pose_w_buffer)))
+            return None
+        if len(self._motion_reference_buffer) > 0 and len(self._pose_w_buffer) > 0 and \
+            abs(self._motion_reference_buffer[0][2] - self._pose_w_buffer[0][2]) > 1e6:
+            self.get_logger().error("Timestamp mismatch: {:d} vs {:d}".format(self._motion_reference_buffer[0][2], self._pose_w_buffer[0][2]))
+            return None
+        return {
+            self.args.topic: self._motion_reference_buffer.pop(0),
+            self.args.pose_w_topic: self._pose_w_buffer.pop(0),
+        }
+
+    def low_state_callback(self, msg: LowState):
+        self.low_state_buffer = msg
         
     def show_robot_reference_callback(self):
         """ update as a timer. """
@@ -152,24 +277,38 @@ class MotionReferencePublisher(Node):
                 self.joint_state_msg.effort.append(0.)
         self.joint_state_pub.publish(self.joint_state_msg)
 
+        # if has low_state, publish orientation in world frame
+        if hasattr(self, "low_state_buffer"):
+            tf_msg = TransformStamped()
+            tf_msg.header.stamp = current_time.to_msg()
+            tf_msg.header.frame_id = "world"
+            tf_msg.child_frame_id = "torso_link"
+            tf_msg.transform.translation.x = 0.
+            tf_msg.transform.translation.y = 0.
+            tf_msg.transform.translation.z = 0.
+            tf_msg.transform.rotation.w = float(self.low_state_buffer.imu_state.quaternion[0])
+            tf_msg.transform.rotation.x = float(self.low_state_buffer.imu_state.quaternion[1])
+            tf_msg.transform.rotation.y = float(self.low_state_buffer.imu_state.quaternion[2])
+            tf_msg.transform.rotation.z = float(self.low_state_buffer.imu_state.quaternion[3])
+            self.tf_broadcaster.sendTransform(tf_msg)
+
         # publish base reference frame
         tf_msg = TransformStamped()
         tf_msg.header.stamp = current_time.to_msg()
-        tf_msg.header.frame_id = "world"
-        tf_msg.child_frame_id = "torso_link"
+        tf_msg.header.frame_id = "torso_link"
+        tf_msg.child_frame_id = "base_pose_ref"
         tf_msg.transform.translation.x = motion_frame.position.x
         tf_msg.transform.translation.y = motion_frame.position.y
         tf_msg.transform.translation.z = motion_frame.position.z
-        
         quat = quaternion.from_rotation_vector(np.array([
             motion_frame.axisangle.x,
             motion_frame.axisangle.y,
             motion_frame.axisangle.z,
         ]))
+        tf_msg.transform.rotation.w = quat.w
         tf_msg.transform.rotation.x = quat.x
         tf_msg.transform.rotation.y = quat.y
         tf_msg.transform.rotation.z = quat.z
-        tf_msg.transform.rotation.w = quat.w
         self.tf_broadcaster.sendTransform(tf_msg)
 
         # publish interested link positions
@@ -182,10 +321,10 @@ class MotionReferencePublisher(Node):
             tf_msg.transform.translation.x = link_pos.x
             tf_msg.transform.translation.y = link_pos.y
             tf_msg.transform.translation.z = link_pos.z
+            tf_msg.transform.rotation.w = 1.
             tf_msg.transform.rotation.x = 0.
             tf_msg.transform.rotation.y = 0.
             tf_msg.transform.rotation.z = 0.
-            tf_msg.transform.rotation.w = 1.
             self.tf_broadcaster.sendTransform(tf_msg)
 
 async def rclpy_spin(node):
@@ -218,6 +357,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--bagdir", type=str, required=True, help="The directory which contains the .mcap file")
     parser.add_argument("--topic", type=str, default="/motion_reference", help="The topic to read from")
+    parser.add_argument("--pose_w_topic", type=str, default="/global_rotation_reference", help="The topic to read the world pose from")
     parser.add_argument("--robot_class", type=str, default="G1_29Dof", help="The robot class to use")
     parser.add_argument("--debug_vis", action="store_true", help="Enable debug visualization")
     args = parser.parse_args()
