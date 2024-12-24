@@ -40,11 +40,15 @@ class G1Node(UnitreeRos2Real):
             if i == self.joint_id:
                 continue
             # to prevent turning off the other motor in control of roll-joint / pitch-joint
-            if self.joint_id == 2 and i == 5: continue
+            if self.joint_id == 2 and i == 5: continue # waist pitch/roll
             if self.joint_id == 5 and i == 2: continue
+            if self.joint_id == 25 and i == 27: continue # left ankle roll/pitch
+            if self.joint_id == 27 and i == 25: continue
+            if self.joint_id == 26 and i == 28: continue # right ankle roll/pitch
+            if self.joint_id == 28 and i == 26: continue
             self.turn_on_motor_mode[i] = 0
-            self.p_gains[i] = 0
-            self.d_gains[i] = 0
+            self.p_gains[i] = 0.0001
+            self.d_gains[i] = 0.0001
 
         main_loop_duration = self.cfg["sim"]["dt"] * self.cfg["decimation"]
         print("Starting main loop with duration: ", main_loop_duration)
