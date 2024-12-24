@@ -27,9 +27,10 @@ def normalize_quat(quat: quaternion) -> quaternion:
         quat: The orientation in (w, x, y, z). Not Batched.
 
     Returns:
-        A normalized quaternion.
+        A normalized quaternion, with w > 0.
     """
-    quat = quat / np.linalg.norm(quaternion.as_float_array(quat)).clip(min=1e-6)
+    quat = quat / np.linalg.norm(quaternion.as_float_array(quat), axis=-1).clip(min=1e-6)
+    quat = quat * np.sign(quaternion.as_float_array(quat)[..., 0])
     return quat
 
 def yaw_quat(quat: quaternion) -> quaternion:
@@ -52,7 +53,8 @@ def yaw_quat(quat: quaternion) -> quaternion:
     return normalize_quat(quaternion.as_quat_array(quat_yaw))
 
 def inv_quat(quat: quaternion) -> quaternion:
-    return normalize_quat(quat.conjugate())
+    quat_norm = np.linalg.norm(quaternion.as_float_array(quat)).clip(min=1e-6)
+    return quat.conjugate() / (quat_norm ** 2)
 
 class MotionReferencePublisher(Node):
     """ Display the motion reference data for rviz visualization.
