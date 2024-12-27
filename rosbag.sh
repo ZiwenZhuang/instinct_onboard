@@ -1,1 +1,1 @@
-ros2 bag record -s mcap -o $1 /lowstate /wirelesscontroller /lowcmd /debug_msg /raw_actions /motion_reference
+ros2 bag record -s mcap -o $1 /lowstate /secondary_imu /wirelesscontroller /lowcmd /debug_msg /raw_actions /motion_reference

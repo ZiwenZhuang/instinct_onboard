@@ -12,7 +12,7 @@ from tf2_ros import TransformBroadcaster
 from geometry_msgs.msg import TransformStamped, PoseArray
 from sensor_msgs.msg import JointState
 
-from unitree_hg.msg import LowState
+from unitree_hg.msg import IMUState
 
 from motion_reference_msgs.msg import MotionReference, MotionFrame
 
@@ -79,10 +79,10 @@ class MotionReferencePublisher(Node):
             1,
         )
 
-        self.low_state_sub = self.create_subscription(
-            LowState,
-            "/lowstate",
-            self.low_state_callback,
+        self.imu_state_sub = self.create_subscription(
+            IMUState,
+            "/secondary_imu",
+            self.imu_state_callback,
             1,
         )
 
@@ -90,8 +90,8 @@ class MotionReferencePublisher(Node):
         self._motion_reference_buffer = []
         self._pose_w_buffer = []
 
-        # wait for low_state_buffer to be filled
-        while not hasattr(self, "low_state_buffer") and rclpy.ok():
+        # wait for imu_state_buffer to be filled
+        while not hasattr(self, "imu_state_buffer") and rclpy.ok():
             rclpy.spin_once(self)
 
         assert self.publish_a_frame(), "Failed to publish the first frame"
@@ -143,7 +143,7 @@ class MotionReferencePublisher(Node):
                 self.rosbag_msg_time = rclpy.time.Time.from_msg(motion_reference_msg.header.stamp)
 
             # update the pose reference based on robot's low state and global rotation reference
-            if hasattr(self, "low_state_buffer"):
+            if hasattr(self, "imu_state_buffer"):
                 _, pose_w_msg, _ = msgs[self.args.pose_w_topic]
                 pos_offset_w = np.array([[
                     pose_w.position.x,
@@ -157,10 +157,10 @@ class MotionReferencePublisher(Node):
                     pose_w.orientation.z,
                 ] for pose_w in pose_w_msg.poses])) # (N, 4)
                 root_quat_w = quaternion.as_quat_array(np.array([
-                    self.low_state_buffer.imu_state.quaternion[0],
-                    self.low_state_buffer.imu_state.quaternion[1],
-                    self.low_state_buffer.imu_state.quaternion[2],
-                    self.low_state_buffer.imu_state.quaternion[3],
+                    self.imu_state_buffer.quaternion[0],
+                    self.imu_state_buffer.quaternion[1],
+                    self.imu_state_buffer.quaternion[2],
+                    self.imu_state_buffer.quaternion[3],
                 ])) # (4,)
                 root_quat_w_inv = inv_quat(root_quat_w)
                 if not hasattr(self, "match_heading_quat_w"):
@@ -240,8 +240,8 @@ class MotionReferencePublisher(Node):
             self.args.pose_w_topic: self._pose_w_buffer.pop(0),
         }
 
-    def low_state_callback(self, msg: LowState):
-        self.low_state_buffer = msg
+    def imu_state_callback(self, msg: IMUState):
+        self.imu_state_buffer = msg
         
     def show_robot_reference_callback(self):
         """ update as a timer. """
@@ -280,7 +280,7 @@ class MotionReferencePublisher(Node):
         self.joint_state_pub.publish(self.joint_state_msg)
 
         # if has low_state, publish orientation in world frame
-        if hasattr(self, "low_state_buffer"):
+        if hasattr(self, "imu_state_buffer"):
             tf_msg = TransformStamped()
             tf_msg.header.stamp = current_time.to_msg()
             tf_msg.header.frame_id = "world"
@@ -288,10 +288,10 @@ class MotionReferencePublisher(Node):
             tf_msg.transform.translation.x = 0.
             tf_msg.transform.translation.y = 0.
             tf_msg.transform.translation.z = 0.
-            tf_msg.transform.rotation.w = float(self.low_state_buffer.imu_state.quaternion[0])
-            tf_msg.transform.rotation.x = float(self.low_state_buffer.imu_state.quaternion[1])
-            tf_msg.transform.rotation.y = float(self.low_state_buffer.imu_state.quaternion[2])
-            tf_msg.transform.rotation.z = float(self.low_state_buffer.imu_state.quaternion[3])
+            tf_msg.transform.rotation.w = float(self.imu_state_buffer.quaternion[0])
+            tf_msg.transform.rotation.x = float(self.imu_state_buffer.quaternion[1])
+            tf_msg.transform.rotation.y = float(self.imu_state_buffer.quaternion[2])
+            tf_msg.transform.rotation.z = float(self.imu_state_buffer.quaternion[3])
             self.tf_broadcaster.sendTransform(tf_msg)
 
         # publish base reference frame

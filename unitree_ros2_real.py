@@ -5,7 +5,7 @@ from rclpy.node import Node
 from unitree_hg.msg import (
     LowState,
     # MotorState,
-    # IMUState,
+    IMUState,
     LowCmd,
     # MotorCmd,
 )
@@ -84,6 +84,7 @@ class UnitreeRos2Real(Node):
     def __init__(self,
             low_state_topic= "/lowstate",
             low_cmd_topic= "/lowcmd",
+            imu_state_topic="/secondary_imu",
             joy_stick_topic= "/wirelesscontroller",
             cfg= dict(),
             lin_vel_deadband= 0.1,
@@ -107,6 +108,7 @@ class UnitreeRos2Real(Node):
         self.NUM_DOF = getattr(robot_cfgs, robot_class_name).NUM_DOF
         self.NUM_ACTIONS = getattr(robot_cfgs, robot_class_name).NUM_ACTIONS
         self.low_state_topic = low_state_topic
+        self.imu_state_topic = imu_state_topic
         # Generate a unique cmd topic so that the low_cmd will not send to the robot's motor.
         self.low_cmd_topic = low_cmd_topic if not dryrun else low_cmd_topic + "_dryrun_" + str(np.random.randint(0, 65535))
         self.joy_stick_topic = joy_stick_topic
@@ -253,6 +255,12 @@ class UnitreeRos2Real(Node):
             self._low_state_callback,
             1
         )
+        self.torso_imu_sub = self.create_subscription(
+            IMUState,
+            self.imu_state_topic,
+            self._torso_imu_state_callback,
+            1
+        )
         self.joy_stick_sub = self.create_subscription(
             WirelessController,
             self.joy_stick_topic,
@@ -303,6 +311,11 @@ class UnitreeRos2Real(Node):
                 self.get_logger().error("The motors and this process shuts down.")
                 self._turn_off_motors()
                 raise SystemExit()
+            
+    def _torso_imu_state_callback(self, msg):
+        """ store and handle torso imu data """
+        self.get_logger().info("Torso IMU data received.", once=True)
+        self.torso_imu_buffer = msg
 
     def _joy_stick_callback(self, msg):
         self.joy_stick_buffer = msg
@@ -363,15 +376,26 @@ class UnitreeRos2Real(Node):
         return np.zeros(3, dtype=np.float32)
     
     def _get_ang_vel_obs(self):
-        return np.array(self.low_state_buffer.imu_state.gyroscope, dtype=np.float32)
+        if hasattr(self, "torso_imu_buffer"):
+            return np.array(self.torso_imu_buffer.gyroscope, dtype=np.float32)
+        else:
+            return np.array(self.low_state_buffer.imu_state.gyroscope, dtype=np.float32)
 
     def _get_projected_gravity_obs(self):
-        quat_wxyz = np.quaternion(
-            self.low_state_buffer.imu_state.quaternion[0],
-            self.low_state_buffer.imu_state.quaternion[1],
-            self.low_state_buffer.imu_state.quaternion[2],
-            self.low_state_buffer.imu_state.quaternion[3],
-        )
+        if hasattr(self, "torso_imu_buffer"):
+            quat_wxyz = np.quaternion(
+                self.torso_imu_buffer.quaternion[0],
+                self.torso_imu_buffer.quaternion[1],
+                self.torso_imu_buffer.quaternion[2],
+                self.torso_imu_buffer.quaternion[3],
+            )
+        else:
+            quat_wxyz = np.quaternion(
+                self.low_state_buffer.imu_state.quaternion[0],
+                self.low_state_buffer.imu_state.quaternion[1],
+                self.low_state_buffer.imu_state.quaternion[2],
+                self.low_state_buffer.imu_state.quaternion[3],
+            )
         return quat_rotate_inverse(
             quat_wxyz,
             self.gravity_vec,
