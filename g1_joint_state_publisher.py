@@ -4,7 +4,7 @@ from unitree_hg.msg import (
     WirelessController,
     LowState,
     # MotorState,
-    # IMUState,
+    IMUState,
     LowCmd,
     # MotorCmd,
 )
@@ -38,6 +38,12 @@ class UnitreeROS2hgJointState(Node):
             self.low_state_callback,
             1,
         )
+        self.torso_imu_sub = self.create_subscription(
+            IMUState,
+            args.torso_imu_topic,
+            self.torso_imu_callback,
+            1,
+        )
 
     def low_state_callback(self, msg):
         self.get_logger().info("low_state revieved", once=True)
@@ -66,12 +72,21 @@ class UnitreeROS2hgJointState(Node):
         tf_msg.transform.translation.x = 0.
         tf_msg.transform.translation.y = 0.
         tf_msg.transform.translation.z = 0.
-        tf_msg.transform.rotation.x = msg.imu_state.quaternion[1].item()
-        tf_msg.transform.rotation.y = msg.imu_state.quaternion[2].item()
-        tf_msg.transform.rotation.z = msg.imu_state.quaternion[3].item()
-        tf_msg.transform.rotation.w = msg.imu_state.quaternion[0].item()
+        if hasattr(self, "torso_imu_buffer"):
+            tf_msg.transform.rotation.x = self.torso_imu_buffer.quaternion[1].item()
+            tf_msg.transform.rotation.y = self.torso_imu_buffer.quaternion[2].item()
+            tf_msg.transform.rotation.z = self.torso_imu_buffer.quaternion[3].item()
+            tf_msg.transform.rotation.w = self.torso_imu_buffer.quaternion[0].item()
+        else:
+            tf_msg.transform.rotation.x = msg.imu_state.quaternion[1].item()
+            tf_msg.transform.rotation.y = msg.imu_state.quaternion[2].item()
+            tf_msg.transform.rotation.z = msg.imu_state.quaternion[3].item()
+            tf_msg.transform.rotation.w = msg.imu_state.quaternion[0].item()
         self.tf_broadcaster.sendTransform(tf_msg)
 
+    def torso_imu_callback(self, msg):
+        self.get_logger().info("torso_imu revieved", once=True)
+        self.torso_imu_buffer = msg
 
 def main(args):
     rclpy.init()
@@ -88,6 +103,7 @@ if __name__ == "__main__":
         help="The robot model to select with corresponding configs (to match the simulation).",
     )
     parser.add_argument("--topic", type=str, default="/lowstate",)
+    parser.add_argument("--torso_imu_topic", type=str, default="/secondary_imu",)
     parser.add_argument("--from_cmd", action="store_true", default=False,
         help="Use this flag to read the arguments from the command line.",)
 
