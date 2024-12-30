@@ -1,4 +1,5 @@
 import os, sys
+import select
 import asyncio
 
 import rclpy
@@ -12,6 +13,7 @@ from tf2_ros import TransformBroadcaster
 from geometry_msgs.msg import TransformStamped, PoseArray
 from sensor_msgs.msg import JointState
 
+from unitree_go.msg import WirelessController
 from unitree_hg.msg import IMUState
 
 from motion_reference_msgs.msg import MotionReference, MotionFrame
@@ -85,6 +87,12 @@ class MotionReferencePublisher(Node):
             self.imu_state_callback,
             1,
         )
+        self.wireless_sub = self.create_subscription(
+            WirelessController,
+            "/wirelesscontroller",
+            self.wireless_callback,
+            1,
+        )
 
         # create some buffers incase the rosbag file is not in order
         self._motion_reference_buffer = []
@@ -116,11 +124,30 @@ class MotionReferencePublisher(Node):
 
     async def motion_reference_publish(self):
         self.get_logger().info("First frame published, publisher system launched, wait for hitting Enter to continue publishing...")
-        user_cmd = input()
-        if user_cmd == "q":
-            self.get_logger().info("User Cancelled.")
-            rclpy.shutdown()
-            return
+        while rclpy.ok():
+            # check exit conditions from wireless controller
+            if hasattr(self, "wireless_buffer") and \
+                ((self.wireless_buffer.keys & robot_cfgs.WirelessButtons.R2) or (self.wireless_buffer.keys & robot_cfgs.WirelessButtons.L2)):
+                self.get_logger().info("Received R2 or L2, Program Exit")
+                rclpy.shutdown()
+                return
+            # check continue conditions from wireless controller
+            if hasattr(self, "wireless_buffer") and (self.wireless_buffer.keys & robot_cfgs.WirelessButtons.L1):
+                self.get_logger().info("Received L1, Continue to policy stage")
+                break
+            
+            # check exit/condinue conditions from keyboard input
+            if select.select([sys.stdin], [], [], 0)[0]:
+                # async input
+                input_str = sys.stdin.readline().strip()
+                if input_str == "":
+                    break
+                elif input_str == "q":
+                    self.get_logger().info("Received q, Program Exit")
+                    rclpy.shutdown()
+                    return
+            
+            await asyncio.sleep(1e-3)
 
         while self.publish_a_frame() and rclpy.ok():
             duration = self.rosbag_msg_time - self.prev_rosbag_msg_time
@@ -242,6 +269,9 @@ class MotionReferencePublisher(Node):
 
     def imu_state_callback(self, msg: IMUState):
         self.imu_state_buffer = msg
+
+    def wireless_callback(self, msg: WirelessController):
+        self.wireless_buffer = msg
         
     def show_robot_reference_callback(self):
         """ update as a timer. """

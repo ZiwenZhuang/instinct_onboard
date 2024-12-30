@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os, sys
+from typing import Sequence
 
 import rclpy
 from rclpy.node import Node
@@ -17,6 +18,23 @@ import yaml
 import onnxruntime as ort
 
 from unitree_ros2_real import UnitreeRos2Real
+import robot_cfgs
+
+class CircularBuffer:
+    """A circular buffer with fixed length and filled with a default value."""
+    def __init__(self, length: int, shape: Sequence[int], default_value: float = 0.0):
+        self.buffer = np.zeros((length, *shape), dtype= np.float32) + default_value
+        self.length = length
+
+    def update(self, value: float):
+        self.buffer = np.roll(self.buffer, -1, axis= 0)
+        self.buffer[-1] = value
+
+    def get(self):
+        return self.buffer
+
+    def clear(self):
+        self.buffer[:] = 0.0
 
 class G1Node(UnitreeRos2Real):
     def __init__(self,
@@ -39,7 +57,31 @@ class G1Node(UnitreeRos2Real):
         self.model_device = model_device
 
         self._initialize_motion_reference_buffer()
-    
+
+    def parse_config(self):
+        super().parse_config()
+
+        # build proiprioception history buffer if needed
+        if "base_ang_vel" in self.cfg["observations"]["policy"] and "history_" in self.cfg["observations"]["policy"]["base_ang_vel"]["func"]:
+            num_frames = self.cfg["observations"]["policy"]["base_ang_vel"]["params"]["num_frames"]
+            self._ang_vel_history_buffer = CircularBuffer(num_frames, (3,))
+        if "projected_gravity" in self.cfg["observations"]["policy"] and "history_" in self.cfg["observations"]["policy"]["projected_gravity"]["func"]:
+            num_frames = self.cfg["observations"]["policy"]["projected_gravity"]["params"]["num_frames"]
+            self._projected_gravity_history_buffer = CircularBuffer(num_frames, (3,))
+        if "joint_pos" in self.cfg["observations"]["policy"] and "history_" in self.cfg["observations"]["policy"]["joint_pos"]["func"]:
+            num_frames = self.cfg["observations"]["policy"]["joint_pos"]["params"]["num_frames"]
+            self._joint_pos_history_buffer = CircularBuffer(num_frames, (self.NUM_JOINTS,))
+        if "joint_vel" in self.cfg["observations"]["policy"] and "history_" in self.cfg["observations"]["policy"]["joint_vel"]["func"]:
+            num_frames = self.cfg["observations"]["policy"]["joint_vel"]["params"]["num_frames"]
+            self._joint_vel_history_buffer = CircularBuffer(num_frames, (self.NUM_JOINTS,))
+        if "last_action" in self.cfg["observations"]["policy"] and "history_" in self.cfg["observations"]["policy"]["last_action"]["func"]:
+            num_frames = self.cfg["observations"]["policy"]["last_action"]["params"]["num_frames"]
+            self._last_action_history_buffer = CircularBuffer(num_frames, (self.NUM_ACTIONS,))
+        if hasattr(self, "_ang_vel_history_buffer") or hasattr(self, "_projected_gravity_history_buffer") or \
+            hasattr(self, "_joint_pos_history_buffer") or hasattr(self, "_joint_vel_history_buffer") or \
+            hasattr(self, "_last_action_history_buffer"):
+            self.get_logger().info("Proprioception history buffers initialized.")
+            
     def _initialize_motion_reference_buffer(self):
         """ Initialize the motion reference buffer for the observation terms.
         Making a concatenated buffer so that the motion reference can be fed to the model faster.
@@ -226,6 +268,27 @@ class G1Node(UnitreeRos2Real):
         obs.append(self._get_joint_vel_obs() * self.obs_scales.get("joint_vel", 1.0))
         obs.append(self._get_last_actions_obs() * self.obs_scales.get("last_action", 1.0))
         return np.concatenate(obs, axis= 0)
+    
+    def _get_proprioception_history_stacked_obs(self):
+        """ Get the stacked proprioception observation terms.
+        Returns:
+            obs: The stacked proprioception observation terms. (no batchwise)
+        """
+        # update the history buffers
+        self._ang_vel_history_buffer.update(self._get_ang_vel_obs() * self.obs_scales.get("base_ang_vel", 1.0))
+        self._projected_gravity_history_buffer.update(self._get_projected_gravity_obs() * self.obs_scales.get("projected_gravity", 1.0))
+        self._joint_pos_history_buffer.update(self._get_joint_pos_obs() * self.obs_scales.get("joint_pos", 1.0))
+        self._joint_vel_history_buffer.update(self._get_joint_vel_obs() * self.obs_scales.get("joint_vel", 1.0))
+        self._last_action_history_buffer.update(self._get_last_actions_obs() * self.obs_scales.get("last_action", 1.0))
+
+        # concat the history buffers
+        return np.concatenate([
+            self._ang_vel_history_buffer.get().flatten(),
+            self._projected_gravity_history_buffer.get().flatten(),
+            self._joint_pos_history_buffer.get().flatten(),
+            self._joint_vel_history_buffer.get().flatten(),
+            self._last_action_history_buffer.get().flatten(),
+        ], axis= 0)
 
     """
     Interfaces for the main function to call and execute.
@@ -271,8 +334,12 @@ class G1Node(UnitreeRos2Real):
         motion_ref_obs = np.expand_dims(self._get_motion_ref_obs(), axis= 0)
         embeddings_input_name = self.onnx_sessions["motion_ref.onnx"].get_inputs()[0].name
         embeddings = self.onnx_sessions["motion_ref.onnx"].run(None, {embeddings_input_name: motion_ref_obs})[0]
-        proprioception_obs = np.concatenate([
-            np.expand_dims(self._get_proprioception_obs(), axis= 0),
+        if hasattr(self, "_ang_vel_history_buffer"):
+            proprioception_obs = self._get_proprioception_history_stacked_obs()
+        else:
+            proprioception_obs = self._get_proprioception_obs()
+        backbone_input = np.concatenate([
+            np.expand_dims(proprioception_obs, axis= 0),
             embeddings,
         ], axis= 1)
         # deal with GRU/MLP actor
@@ -284,7 +351,7 @@ class G1Node(UnitreeRos2Real):
             if not hasattr(self, "actor_hidden"):
                 self.actor_hidden = np.zeros((1, *actor_hidden_name.shape), dtype= np.float32)
             actions, actor_hidden = self.onnx_sessions["actor.onnx"].run(
-                None, {actor_input_name: proprioception_obs, actor_hidden_name: self.actor_hidden},
+                None, {actor_input_name: backbone_input, actor_hidden_name: self.actor_hidden},
             )
             if self.run_stage == "policy": # update hidden state only when running policy
                 self.actor_hidden = actor_hidden
@@ -292,7 +359,7 @@ class G1Node(UnitreeRos2Real):
             # MLP actor
             actor_input_name = actor_inputs[0].name
             actions = self.onnx_sessions["actor.onnx"].run(
-                None, {actor_input_name: proprioception_obs},
+                None, {actor_input_name: backbone_input},
             )[0]
 
         # Send the action depending on the stage.
@@ -322,7 +389,7 @@ class G1Node(UnitreeRos2Real):
             pass
 
         # Switch the stage if necessary.
-        if self.joy_stick_buffer.keys & self.WirelessButtons.R1:
+        if self.joy_stick_buffer.keys & robot_cfgs.WirelessButtons.R1:
             if self.run_stage == "policy":
                 self.get_logger().warn(
                     "Should not switch to startup stage while running policy. No switching. Current stage: " + self.run_stage,
@@ -331,7 +398,7 @@ class G1Node(UnitreeRos2Real):
             else:
                 self.run_stage = "startup"
                 self.get_logger().info("Switched to startup stage.", throttle_duration_sec= 0.2)
-        elif self.joy_stick_buffer.keys & self.WirelessButtons.L1:
+        elif self.joy_stick_buffer.keys & robot_cfgs.WirelessButtons.L1:
             if self.run_stage == "policy":
                 pass # nothing to do
             elif self.run_stage == "startup":
