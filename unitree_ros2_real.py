@@ -97,7 +97,7 @@ class UnitreeRos2Real(Node):
             cmd_nyaw_range= [0.4, 1.6], # check joy_stick_callback (p for positive, n for negative)
             move_by_wireless_remote= False, # if True, the robot will be controlled by a wireless remote
             computer_clip_torque= True, # if True, the actions will be clipped by torque limits
-            dof_pos_protect_ratio= 1.5, # if the dof_pos is out of the range of this ratio, the process will shutdown.
+            joint_pos_protect_ratio= 1.5, # if the joint_pos is out of the range of this ratio, the process will shutdown.
             kp_factor= 1.0, # the factor to multiply the p_gain
             kd_factor= 1.0, # the factor to multiply the d_gain
             torque_limits_ratio= 1.0, # the factor to multiply the torque limits
@@ -105,7 +105,7 @@ class UnitreeRos2Real(Node):
             dryrun= True, # if True, the robot will not send commands to the real robot
         ):
         super().__init__("unitree_ros2_real")
-        self.NUM_DOF = getattr(robot_cfgs, robot_class_name).NUM_DOF
+        self.NUM_JOINTS = getattr(robot_cfgs, robot_class_name).NUM_JOINTS
         self.NUM_ACTIONS = getattr(robot_cfgs, robot_class_name).NUM_ACTIONS
         self.low_state_topic = low_state_topic
         self.imu_state_topic = imu_state_topic
@@ -123,17 +123,17 @@ class UnitreeRos2Real(Node):
         self.cmd_nyaw_range = cmd_nyaw_range
         self.move_by_wireless_remote = move_by_wireless_remote
         self.computer_clip_torque = computer_clip_torque
-        self.dof_pos_protect_ratio = dof_pos_protect_ratio
+        self.joint_pos_protect_ratio = joint_pos_protect_ratio
         self.kp_factor = kp_factor
         self.kd_factor = kd_factor
         self.torque_limits_ratio = torque_limits_ratio
         self.robot_class_name = robot_class_name
         self.dryrun = dryrun
 
-        self.dof_map = getattr(robot_cfgs, robot_class_name).dof_map
-        self.sim_dof_names = getattr(robot_cfgs, robot_class_name).sim_dof_names
-        self.real_dof_names = getattr(robot_cfgs, robot_class_name).real_dof_names
-        self.dof_signs = getattr(robot_cfgs, robot_class_name).dof_signs
+        self.joint_map = getattr(robot_cfgs, robot_class_name).joint_map
+        self.sim_joint_names = getattr(robot_cfgs, robot_class_name).sim_joint_names
+        self.real_joint_names = getattr(robot_cfgs, robot_class_name).real_joint_names
+        self.joint_signs = getattr(robot_cfgs, robot_class_name).joint_signs
         self.turn_on_motor_mode = getattr(robot_cfgs, robot_class_name).turn_on_motor_mode
         self.mode_pr = getattr(robot_cfgs, robot_class_name).mode_pr
 
@@ -157,20 +157,20 @@ class UnitreeRos2Real(Node):
                 self.obs_scales[obs_names] = obs_config["scale"]
 
         # controls
-        self.default_dof_pos = np.zeros(self.NUM_DOF, dtype=np.float32)
+        self.default_joint_pos = np.zeros(self.NUM_JOINTS, dtype=np.float32)
         for joint_name_expr, joint_pos in self.cfg["scene"]["robot"]["init_state"]["joint_pos"].items():
-            # compute the default dof pos from configuration for articulation.default_dof_pos
-            for i in range(self.NUM_DOF):
-                name = self.sim_dof_names[i]
+            # compute the default joint pos from configuration for articulation.default_joint_pos
+            for i in range(self.NUM_JOINTS):
+                name = self.sim_joint_names[i]
                 if re.search(joint_name_expr, name):
-                    self.default_dof_pos[i] = joint_pos
-        self.p_gains = np.zeros(self.NUM_DOF, dtype=np.float32)
-        self.d_gains = np.zeros(self.NUM_DOF, dtype=np.float32)
+                    self.default_joint_pos[i] = joint_pos
+        self.p_gains = np.zeros(self.NUM_JOINTS, dtype=np.float32)
+        self.d_gains = np.zeros(self.NUM_JOINTS, dtype=np.float32)
         for actuator_name, actuator_config in self.cfg["scene"]["robot"]["actuators"].items():
             assert "PDActuator" in actuator_config["class_type"], \
                 "Only PDActuator trained model is supported for now. Get {} in actuator {}".format(actuator_config["class_type"], actuator_name)
-            for i in range(self.NUM_DOF):
-                name = self.sim_dof_names[i]
+            for i in range(self.NUM_JOINTS):
+                name = self.sim_joint_names[i]
                 for _, joint_name_expr in enumerate(actuator_config["joint_names_expr"]):
                     if re.search(joint_name_expr, name):
                         if isinstance(actuator_config["stiffness"], dict):
@@ -185,7 +185,7 @@ class UnitreeRos2Real(Node):
                                     self.d_gains[i] = value
                         else:
                             self.d_gains[i] = actuator_config["damping"]
-                        # print(f"Joint {i}({self.sim_dof_names[i]}) has p_gain {self.p_gains[i]} and d_gain {self.d_gains[i]}")
+                        # print(f"Joint {i}({self.sim_joint_names[i]}) has p_gain {self.p_gains[i]} and d_gain {self.d_gains[i]}")
         self.p_gains *= self.kp_factor
         self.d_gains *= self.kd_factor
         self.get_logger().info("PD gains are set to: p_gains: {}, d_gains: {}".format(self.p_gains, self.d_gains))
@@ -194,26 +194,26 @@ class UnitreeRos2Real(Node):
         self.get_logger().info("Torque limits are set by ratio of : {}".format(self.torque_limits_ratio))
         
         # buffers for observation output (in simulation order)
-        self.dof_pos_ = np.zeros(self.NUM_DOF, dtype=np.float32) # in robot urdf coordinate, but in simulation order. no offset substracted
-        self.dof_vel_ = np.zeros(self.NUM_DOF, dtype=np.float32)
+        self.joint_pos_ = np.zeros(self.NUM_JOINTS, dtype=np.float32) # in robot urdf coordinate, but in simulation order. no offset substracted
+        self.joint_vel_ = np.zeros(self.NUM_JOINTS, dtype=np.float32)
         
         # actions
         self.actions_scale = np.zeros(self.NUM_ACTIONS, dtype=np.float32)
         for action_names, action_config in self.cfg["actions"].items():
             if not action_config["asset_name"] == "robot":
                 continue
-            for i in range(self.NUM_DOF):
-                name = self.sim_dof_names[i]
+            for i in range(self.NUM_JOINTS):
+                name = self.sim_joint_names[i]
                 for _, joint_name_expr in enumerate(action_config["joint_names"]):
                     if re.search(joint_name_expr, name):
                         self.actions_scale[i] = action_config["scale"]
                         # print("Joint {}({}) has action scale {}".format(i, name, self.actions_scale[i]))
                     if not action_config["use_default_offset"]:
-                        # not using articulation.default_dof_pos as default offset
+                        # not using articulation.default_joint_pos as default offset
                         if isinstance(action_config["offset"], dict):
-                            self.default_dof_pos[i] = action_config["offset"][joint_name_expr]
+                            self.default_joint_pos[i] = action_config["offset"][joint_name_expr]
                         else:
-                            self.default_dof_pos[i] = action_config["offset"]            
+                            self.default_joint_pos[i] = action_config["offset"]            
         self.actions_raw = np.zeros(self.NUM_ACTIONS, dtype=np.float32)
         self.actions = np.zeros(self.NUM_ACTIONS, dtype=np.float32)
 
@@ -222,8 +222,8 @@ class UnitreeRos2Real(Node):
         self.joint_limits_low = getattr(robot_cfgs, self.robot_class_name).joint_limits_low
         joint_pos_mid = (self.joint_limits_high + self.joint_limits_low) / 2
         joint_pos_range = (self.joint_limits_high - self.joint_limits_low) / 2
-        self.joint_pos_protect_high = joint_pos_mid + joint_pos_range * self.dof_pos_protect_ratio
-        self.joint_pos_protect_low = joint_pos_mid - joint_pos_range * self.dof_pos_protect_ratio
+        self.joint_pos_protect_high = joint_pos_mid + joint_pos_range * self.joint_pos_protect_ratio
+        self.joint_pos_protect_low = joint_pos_mid - joint_pos_range * self.joint_pos_protect_ratio
 
     def start_ros_handlers(self):
         """ After initializing the env and policy, register ros related callbacks and topics
@@ -294,18 +294,18 @@ class UnitreeRos2Real(Node):
         self.low_state_buffer = msg # keep the latest low state
         self.low_cmd_buffer.mode_machine = msg.mode_machine
 
-        # refresh dof_pos and dof_vel
-        for sim_idx in range(self.NUM_DOF):
-            real_idx = self.dof_map[sim_idx]
-            self.dof_pos_[sim_idx] = self.low_state_buffer.motor_state[real_idx].q * self.dof_signs[sim_idx]
-        for sim_idx in range(self.NUM_DOF):
-            real_idx = self.dof_map[sim_idx]
-            self.dof_vel_[sim_idx] = self.low_state_buffer.motor_state[real_idx].dq * self.dof_signs[sim_idx]
+        # refresh joint_pos and joint_vel
+        for sim_idx in range(self.NUM_JOINTS):
+            real_idx = self.joint_map[sim_idx]
+            self.joint_pos_[sim_idx] = self.low_state_buffer.motor_state[real_idx].q * self.joint_signs[sim_idx]
+        for sim_idx in range(self.NUM_JOINTS):
+            real_idx = self.joint_map[sim_idx]
+            self.joint_vel_[sim_idx] = self.low_state_buffer.motor_state[real_idx].dq * self.joint_signs[sim_idx]
         # automatic safety check
-        for sim_idx in range(self.NUM_DOF):
-            real_idx = self.dof_map[sim_idx]
-            if self.dof_pos_[sim_idx] > self.joint_pos_protect_high[sim_idx] or \
-                self.dof_pos_[sim_idx] < self.joint_pos_protect_low[sim_idx]:
+        for sim_idx in range(self.NUM_JOINTS):
+            real_idx = self.joint_map[sim_idx]
+            if self.joint_pos_[sim_idx] > self.joint_pos_protect_high[sim_idx] or \
+                self.joint_pos_[sim_idx] < self.joint_pos_protect_low[sim_idx]:
                 self.get_logger().error(f"Joint {sim_idx}(sim), {real_idx}(real) position out of range at {self.low_state_buffer.motor_state[real_idx].q}")
                 self.debug_msg_publisher.publish(String(data= f"Joint {sim_idx}(sim), {real_idx}(real) position out of range at {self.low_state_buffer.motor_state[real_idx].q}"))
                 self.get_logger().error("The motors and this process shuts down.")
@@ -404,11 +404,11 @@ class UnitreeRos2Real(Node):
     def _get_commands_obs(self):
         return self.xyyaw_command
 
-    def _get_dof_pos_obs(self):
-        return self.dof_pos_ - self.default_dof_pos
+    def _get_joint_pos_obs(self):
+        return self.joint_pos_ - self.default_joint_pos
 
-    def _get_dof_vel_obs(self):
-        return self.dof_vel_
+    def _get_joint_vel_obs(self):
+        return self.joint_vel_
 
     def _get_last_actions_obs(self):
         return self.actions
@@ -434,10 +434,10 @@ class UnitreeRos2Real(Node):
             segments["projected_gravity"] = (3,)
         if "commands" in components:
             segments["commands"] = (3,)
-        if "dof_pos" in components:
-            segments["dof_pos"] = (self.NUM_DOF,)
-        if "dof_vel" in components:
-            segments["dof_vel"] = (self.NUM_DOF,)
+        if "joint_pos" in components:
+            segments["joint_pos"] = (self.NUM_JOINTS,)
+        if "joint_vel" in components:
+            segments["joint_vel"] = (self.NUM_JOINTS,)
         if "last_actions" in components:
             segments["last_actions"] = (self.NUM_ACTIONS,)
         
@@ -467,10 +467,10 @@ class UnitreeRos2Real(Node):
         """
 
         # NOTE: Currently only support position control with PD controller
-        p_limits_low = (-self.torque_limits) + self.d_gains*self.dof_vel_
-        p_limits_high = (self.torque_limits) + self.d_gains*self.dof_vel_
-        actions_low = (p_limits_low/self.p_gains) - self.default_dof_pos + self.dof_pos_
-        actions_high = (p_limits_high/self.p_gains) - self.default_dof_pos + self.dof_pos_
+        p_limits_low = (-self.torque_limits) + self.d_gains*self.joint_vel_
+        p_limits_high = (self.torque_limits) + self.d_gains*self.joint_vel_
+        actions_low = (p_limits_low/self.p_gains) - self.default_joint_pos + self.joint_pos_
+        actions_high = (p_limits_high/self.p_gains) - self.default_joint_pos + self.joint_pos_
 
         return np.clip(actions_scaled, actions_low, actions_high)
 
@@ -489,7 +489,7 @@ class UnitreeRos2Real(Node):
         else:
             self.get_logger().warn("Computer Clip Torque is False, the robot may be damaged.", throttle_duration_sec= 5)
             clipped_scaled_action = actions * self.actions_scale
-        robot_coordinates_action = clipped_scaled_action + self.default_dof_pos
+        robot_coordinates_action = clipped_scaled_action + self.default_joint_pos
         if np.isnan(actions).any():
             self.get_logger().error("Actions contain NaN, Skip sending the action to the robot.")
             return
@@ -501,13 +501,13 @@ class UnitreeRos2Real(Node):
 
     def _publish_legs_cmd(self, robot_coordinates_action: np.array):
         """ Publish the joint commands to the robot legs in robot coordinates system.
-        robot_coordinates_action: shape (NUM_DOF,), in simulation order.
+        robot_coordinates_action: shape (NUM_JOINTS,), in simulation order.
         """
-        for sim_idx in range(self.NUM_DOF):
-            real_idx = self.dof_map[sim_idx]
+        for sim_idx in range(self.NUM_JOINTS):
+            real_idx = self.joint_map[sim_idx]
             if not self.dryrun:
                 self.low_cmd_buffer.motor_cmd[real_idx].mode = self.turn_on_motor_mode[sim_idx]
-            self.low_cmd_buffer.motor_cmd[real_idx].q = (robot_coordinates_action[sim_idx] * self.dof_signs[sim_idx]).item()
+            self.low_cmd_buffer.motor_cmd[real_idx].q = (robot_coordinates_action[sim_idx] * self.joint_signs[sim_idx]).item()
             self.low_cmd_buffer.motor_cmd[real_idx].dq = 0.
             self.low_cmd_buffer.motor_cmd[real_idx].tau = 0.
             self.low_cmd_buffer.motor_cmd[real_idx].kp = self.p_gains[sim_idx].item()
@@ -522,8 +522,8 @@ class UnitreeRos2Real(Node):
 
     def _turn_off_motors(self):
         """ Turn off the motors """
-        for sim_idx in range(self.NUM_DOF):
-            real_idx = self.dof_map[sim_idx]
+        for sim_idx in range(self.NUM_JOINTS):
+            real_idx = self.joint_map[sim_idx]
             self.low_cmd_buffer.motor_cmd[real_idx].mode = 0x00
             self.low_cmd_buffer.motor_cmd[real_idx].q = 0.
             self.low_cmd_buffer.motor_cmd[real_idx].dq = 0.

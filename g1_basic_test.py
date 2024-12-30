@@ -35,7 +35,7 @@ class G1Node(UnitreeRos2Real):
     def start_ros_handlers(self):
         super().start_ros_handlers()
 
-        print("joint_id:", self.joint_id, "at real idx:", self.dof_map[self.joint_id])
+        print("joint_id:", self.joint_id, "at real idx:", self.joint_map[self.joint_id])
         for i in range(len(self.turn_on_motor_mode)):
             if i == self.joint_id:
                 continue
@@ -65,7 +65,7 @@ class G1Node(UnitreeRos2Real):
     def main_loop(self):
         """The single loop for the robot to execute."""
         if self.anchor_pos is None:
-            self.anchor_pos = self._get_dof_pos_obs()[self.joint_id]
+            self.anchor_pos = self._get_joint_pos_obs()[self.joint_id]
             self.anchor_time = self.get_clock().now()
         time = self.get_clock().now() - self.anchor_time
         swing = self.swing_scale * np.sin(2 * np.pi * self.swing_frequency * (time.nanoseconds / 1e9))

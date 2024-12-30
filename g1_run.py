@@ -68,14 +68,14 @@ class G1Node(UnitreeRos2Real):
                 motion_frame_size += 4 # plane mask, height mask, orientation mask, heading mask
                 self.motion_ref_term_slices[obs_term_name] = slice(motion_frame_size-4, motion_frame_size)
             elif "dof_pos_ref" == obs_term_name:
-                motion_frame_size += self.NUM_DOF
-                self.motion_ref_term_slices[obs_term_name] = slice(motion_frame_size-self.NUM_DOF, motion_frame_size)
+                motion_frame_size += self.NUM_JOINTS
+                self.motion_ref_term_slices[obs_term_name] = slice(motion_frame_size-self.NUM_JOINTS, motion_frame_size)
             elif "dof_pos_err_ref" == obs_term_name:
-                motion_frame_size += self.NUM_DOF
-                self.motion_ref_term_slices[obs_term_name] = slice(motion_frame_size-self.NUM_DOF, motion_frame_size)
+                motion_frame_size += self.NUM_JOINTS
+                self.motion_ref_term_slices[obs_term_name] = slice(motion_frame_size-self.NUM_JOINTS, motion_frame_size)
             elif "dof_pos_mask" == obs_term_name:
-                motion_frame_size += self.NUM_DOF
-                self.motion_ref_term_slices[obs_term_name] = slice(motion_frame_size-self.NUM_DOF, motion_frame_size)
+                motion_frame_size += self.NUM_JOINTS
+                self.motion_ref_term_slices[obs_term_name] = slice(motion_frame_size-self.NUM_JOINTS, motion_frame_size)
             elif "link_pos_ref" == obs_term_name:
                 motion_frame_size += len(self._interested_link_names) * 3
                 self.motion_ref_term_slices[obs_term_name] = slice(motion_frame_size-len(self._interested_link_names)*3, motion_frame_size)
@@ -122,7 +122,7 @@ class G1Node(UnitreeRos2Real):
         onnx_outputs = self.onnx_sessions["forward_kinematics.onnx"].run(
             None,
             {
-                input_name: np.expand_dims(self.dof_pos_, axis= 0),
+                input_name: np.expand_dims(self.joint_pos_, axis= 0),
             }
         )
         self._interested_link_pos_b[:] = onnx_outputs[0].reshape(len(self._interested_link_names), 3)
@@ -160,9 +160,9 @@ class G1Node(UnitreeRos2Real):
                 elif term_name == "pose_ref_mask":
                     self.motion_ref_buffer[frame_idx, term_slice] = motion_frame.pose_mask
                 elif term_name == "dof_pos_ref":
-                    self.motion_ref_buffer[frame_idx, term_slice] = motion_frame.dof_pos - self.default_dof_pos
+                    self.motion_ref_buffer[frame_idx, term_slice] = motion_frame.dof_pos - self.default_joint_pos
                 elif term_name == "dof_pos_err_ref":
-                    self.motion_ref_buffer[frame_idx, term_slice] = motion_frame.dof_pos - self.dof_pos_
+                    self.motion_ref_buffer[frame_idx, term_slice] = motion_frame.dof_pos - self.joint_pos_
                 elif term_name == "dof_pos_mask":
                     self.motion_ref_buffer[frame_idx, term_slice] = motion_frame.dof_pos_mask
                 elif term_name == "link_pos_ref":
@@ -191,11 +191,11 @@ class G1Node(UnitreeRos2Real):
         self.motion_ref_buffer[:, self.motion_ref_term_slices["time_from_ref_update"]] = time_passed_from_refreshed
 
         # update the motion reference buffer in the error terms
-        self.motion_ref_buffer[:, self.motion_ref_term_slices["dof_pos_err_ref"]] = self.motion_ref_buffer[:, self.motion_ref_term_slices["dof_pos_ref"]] - self.dof_pos_[None, :] + self.default_dof_pos[None, :]
+        self.motion_ref_buffer[:, self.motion_ref_term_slices["dof_pos_err_ref"]] = self.motion_ref_buffer[:, self.motion_ref_term_slices["dof_pos_ref"]] - self.joint_pos_[None, :] + self.default_joint_pos[None, :]
         self.motion_ref_buffer[:, self.motion_ref_term_slices["link_pos_err_ref"]] = self.motion_ref_buffer[:, self.motion_ref_term_slices["link_pos_ref"]] - self._interested_link_pos_b.flatten()[None, :]
 
         # update the current state as pseudo-motion reference
-        self.current_state_motion_ref[self.motion_ref_term_slices["dof_pos_ref"]] = self._get_dof_pos_obs()
+        self.current_state_motion_ref[self.motion_ref_term_slices["dof_pos_ref"]] = self._get_joint_pos_obs()
         self.current_state_motion_ref[self.motion_ref_term_slices["link_pos_ref"]] = self._interested_link_pos_b.flatten()
 
         if (self.time_to_target_when_refreshed < time_passed_from_refreshed).all() and self.run_stage == "policy":
@@ -222,8 +222,8 @@ class G1Node(UnitreeRos2Real):
         # this node system. So, you should check the names in the training config file.
         obs.append(self._get_ang_vel_obs() * self.obs_scales.get("base_ang_vel", 1.0))
         obs.append(self._get_projected_gravity_obs() * self.obs_scales.get("projected_gravity", 1.0))
-        obs.append(self._get_dof_pos_obs() * self.obs_scales.get("joint_pos", 1.0))
-        obs.append(self._get_dof_vel_obs() * self.obs_scales.get("joint_vel", 1.0))
+        obs.append(self._get_joint_pos_obs() * self.obs_scales.get("joint_pos", 1.0))
+        obs.append(self._get_joint_vel_obs() * self.obs_scales.get("joint_vel", 1.0))
         obs.append(self._get_last_actions_obs() * self.obs_scales.get("last_action", 1.0))
         return np.concatenate(obs, axis= 0)
 
@@ -306,7 +306,7 @@ class G1Node(UnitreeRos2Real):
                 self.get_logger().info("Joint close to 0-th frame of motion reference", throttle_duration_sec= 1)
             dof_pos_target = np.where(
                 err_large_mask,
-                self.dof_pos_ + np.sign(dof_pos_err) * self.startup_step_size - self.default_dof_pos,
+                self.joint_pos_ + np.sign(dof_pos_err) * self.startup_step_size - self.default_joint_pos,
                 dof_pos_target,
             )
             actions = np.expand_dims(

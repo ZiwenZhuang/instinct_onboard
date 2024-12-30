@@ -52,16 +52,16 @@ class UnitreeROS2hgJointState(Node):
         self.joint_state.position = []
         self.joint_state.velocity = []
         self.joint_state.effort = []
-        for i in range(len(self.robot_class.sim_dof_names)):
-            self.joint_state.name.append(self.robot_class.sim_dof_names[i])
+        for i in range(len(self.robot_class.sim_joint_names)):
+            self.joint_state.name.append(self.robot_class.sim_joint_names[i])
             self.joint_state.position.append(
-                msg.motor_state[self.robot_class.dof_map[i]].q * self.robot_class.dof_signs[i],
+                msg.motor_state[self.robot_class.joint_map[i]].q * self.robot_class.joint_signs[i],
             )
             self.joint_state.velocity.append(
-                msg.motor_state[self.robot_class.dof_map[i]].dq * self.robot_class.dof_signs[i],
+                msg.motor_state[self.robot_class.joint_map[i]].dq * self.robot_class.joint_signs[i],
             )
             self.joint_state.effort.append(
-                msg.motor_state[self.robot_class.dof_map[i]].tau_est * self.robot_class.dof_signs[i],
+                msg.motor_state[self.robot_class.joint_map[i]].tau_est * self.robot_class.joint_signs[i],
             )
         self.joint_state_pub.publish(self.joint_state)
 

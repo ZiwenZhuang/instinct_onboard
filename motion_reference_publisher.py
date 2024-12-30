@@ -261,7 +261,7 @@ class MotionReferencePublisher(Node):
                     closest_motion_frame_time = motion_frame.time_to_target
                     frame_idx = idx
         if frame_idx == -1:
-            self.get_logger().info("Recieved motion refernce exhausted for now")
+            # self.get_logger().info("Recieved motion refernce exhausted for now")
             return
         motion_frame = self.motion_reference_msg.data[frame_idx]
         
@@ -273,7 +273,7 @@ class MotionReferencePublisher(Node):
         self.joint_state_msg.effort = []
         for i in range(len(motion_frame.dof_pos)):
             if motion_frame.dof_pos_mask[i]:
-                self.joint_state_msg.name.append(self.robot_cfg.sim_dof_names[i])
+                self.joint_state_msg.name.append(self.robot_cfg.sim_joint_names[i])
                 self.joint_state_msg.position.append(motion_frame.dof_pos[i])
                 self.joint_state_msg.velocity.append(0.)
                 self.joint_state_msg.effort.append(0.)

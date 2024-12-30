@@ -3,9 +3,9 @@ import numpy as np
 """A general configuration file for the robots, shared between different scripts. """
 
 class G1_29Dof:
-    NUM_DOF = 29
+    NUM_JOINTS = 29
     NUM_ACTIONS = 29
-    dof_map = [
+    joint_map = [
         15, 22, # shoulder pitch
         14, # waist pitch
         16, 23, # shoulder roll
@@ -23,7 +23,7 @@ class G1_29Dof:
         4, 10, # ankle pitch
         5, 11, # ankle roll
     ]
-    sim_dof_names = [ # NOTE: order matters. This list is the order in simulation.
+    sim_joint_names = [ # NOTE: order matters. This list is the order in simulation.
         'left_shoulder_pitch_joint', #
         'right_shoulder_pitch_joint',
         'waist_pitch_joint',
@@ -54,7 +54,7 @@ class G1_29Dof:
         'left_ankle_roll_joint',
         'right_ankle_roll_joint',
     ]
-    real_dof_names = [ # NOTE: order matters. This list is the order in real robot.
+    real_joint_names = [ # NOTE: order matters. This list is the order in real robot.
         'left_hip_pitch_joint',
         'left_hip_roll_joint',
         'left_hip_yaw_joint',
@@ -85,7 +85,7 @@ class G1_29Dof:
         'right_wrist_pitch_joint',
         'right_wrist_yaw_joint',
     ]
-    dof_signs = np.array([
+    joint_signs = np.array([
         1, 1, -1,
         1, 1, -1,
         1, 1, -1,
