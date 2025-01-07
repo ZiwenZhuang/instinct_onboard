@@ -35,6 +35,10 @@ def normalize_quat(quat: quaternion) -> quaternion:
     quat = quat * np.sign(quaternion.as_float_array(quat)[..., 0])
     return quat
 
+def inv_quat(quat: quaternion) -> quaternion:
+    quat_norm = np.linalg.norm(quaternion.as_float_array(quat)).clip(min=1e-6)
+    return quat.conjugate() / (quat_norm ** 2)
+
 def yaw_quat(quat: quaternion) -> quaternion:
     """Extract the yaw component of a quaternion.
 
@@ -124,6 +128,12 @@ class MotionReferencePublisher(Node):
 
     async def motion_reference_publish(self):
         self.get_logger().info("First frame published, publisher system launched, wait for hitting Enter to continue publishing...")
+        self.get_logger().warn("Please let the controller process into startup stage.")
+        self.get_logger().warn("Put the robot into the initial pose, and press A to compute yaw correction data.")
+        self.get_logger().warn("Press L1 to continue to policy stage.")
+        
+        yaw_correction_triggered = False
+        
         while rclpy.ok():
             # check exit conditions from wireless controller
             if hasattr(self, "wireless_buffer") and \
@@ -131,6 +141,13 @@ class MotionReferencePublisher(Node):
                 self.get_logger().info("Received R2 or L2, Program Exit")
                 rclpy.shutdown()
                 return
+            # check if to compute yaw correction
+            if hasattr(self, "imu_state_buffer") and hasattr(self, "wireless_buffer") and \
+                (self.wireless_buffer.keys & robot_cfgs.WirelessButtons.A) and \
+                (not yaw_correction_triggered):
+                self.get_logger().info("Received A, Compute the yaw correction")
+                self.compute_yaw_correction()
+                yaw_correction_triggered = True
             # check continue conditions from wireless controller
             if hasattr(self, "wireless_buffer") and (self.wireless_buffer.keys & robot_cfgs.WirelessButtons.L1):
                 self.get_logger().info("Received L1, Continue to policy stage")
@@ -149,6 +166,7 @@ class MotionReferencePublisher(Node):
             
             await asyncio.sleep(1e-3)
 
+        # keep publishing the frames until the end of the rosbag
         while self.publish_a_frame() and rclpy.ok():
             duration = self.rosbag_msg_time - self.prev_rosbag_msg_time
             sleep_time_f = (duration).nanoseconds / 1e9
@@ -190,17 +208,15 @@ class MotionReferencePublisher(Node):
                     self.imu_state_buffer.quaternion[3],
                 ])) # (4,)
                 root_quat_w_inv = inv_quat(root_quat_w)
-                if not hasattr(self, "match_heading_quat_w"):
-                    # The first frame, update the robot's heading
-                    root_heading_quat_w = yaw_quat(root_quat_w)
-                    ref_heading_quat_w = yaw_quat(ref_quat_w[0])
-                    self.match_heading_quat_w = normalize_quat(root_heading_quat_w * inv_quat(ref_heading_quat_w))
-                # update the heading based on the initial heading of the robot.
-                ref_quat_w = normalize_quat(self.match_heading_quat_w * ref_quat_w)
-                pos_offset_w = quaternion.rotate_vectors(
-                    self.match_heading_quat_w,
-                    pos_offset_w,
-                ) # (N, 3)
+                if hasattr(self, "match_heading_quat_w"):
+                    # update the heading based on the initial heading of the robot.
+                    ref_quat_w = normalize_quat(self.match_heading_quat_w * ref_quat_w)
+                    pos_offset_w = quaternion.rotate_vectors(
+                        self.match_heading_quat_w,
+                        pos_offset_w,
+                    ) # (N, 3)
+                else:
+                    self.get_logger().warn("No match heading quaternion found, using the original heading")
                 # compute the pose reference in base frame
                 pos_offset_b = quaternion.rotate_vectors(
                     root_quat_w_inv,
@@ -216,6 +232,8 @@ class MotionReferencePublisher(Node):
                     motion_frame.axisangle.x = axisang_b[frame_idx, 0]
                     motion_frame.axisangle.y = axisang_b[frame_idx, 1]
                     motion_frame.axisangle.z = axisang_b[frame_idx, 2]
+                # save the pose reference message
+                self.pose_w_msg = pose_w_msg
                 
             # update the real pulish time.
             self.msg_publish_time = self.get_clock().now()
@@ -266,6 +284,67 @@ class MotionReferencePublisher(Node):
             self.args.topic: self._motion_reference_buffer.pop(0),
             self.args.pose_w_topic: self._pose_w_buffer.pop(0),
         }
+    
+    def compute_yaw_correction(self):
+        """ Compute the match_heading_quat_w data to rotate the reference pose to the robot's heading."""
+        assert hasattr(self, "imu_state_buffer"), "No imu_state_buffer found"
+        assert hasattr(self, "motion_reference_msg"), "No motion_reference_msg found"
+
+        robot_quat = quaternion.as_quat_array(np.array([
+            self.imu_state_buffer.quaternion[0],
+            self.imu_state_buffer.quaternion[1],
+            self.imu_state_buffer.quaternion[2],
+            self.imu_state_buffer.quaternion[3],
+        ]))
+        ref_quat_w = quaternion.as_quat_array(np.array([
+            self.pose_w_msg.poses[0].orientation.w,
+            self.pose_w_msg.poses[0].orientation.x,
+            self.pose_w_msg.poses[0].orientation.y,
+            self.pose_w_msg.poses[0].orientation.z,
+        ]))
+        from_ref_to_robot = robot_quat * inv_quat(ref_quat_w)
+        self.match_heading_quat_w = yaw_quat(from_ref_to_robot)
+
+        # update the pose reference message and publish again
+        root_quat_w = quaternion.as_quat_array(np.array([
+            self.imu_state_buffer.quaternion[0],
+            self.imu_state_buffer.quaternion[1],
+            self.imu_state_buffer.quaternion[2],
+            self.imu_state_buffer.quaternion[3],
+        ])) # (4,)
+        root_quat_w_inv = inv_quat(root_quat_w)
+        for frame_idx in range(len(self.motion_reference_msg.data)):
+            ref_quat_w = quaternion.as_quat_array(np.array([
+                self.pose_w_msg.poses[frame_idx].orientation.w,
+                self.pose_w_msg.poses[frame_idx].orientation.x,
+                self.pose_w_msg.poses[frame_idx].orientation.y,
+                self.pose_w_msg.poses[frame_idx].orientation.z,
+            ]))
+            ref_quat_w = normalize_quat(self.match_heading_quat_w * ref_quat_w)
+            pos_offset_b = np.array([
+                self.motion_reference_msg.data[frame_idx].position.x,
+                self.motion_reference_msg.data[frame_idx].position.y,
+                self.motion_reference_msg.data[frame_idx].position.z,
+            ])
+            pos_offset_b = quaternion.rotate_vectors(
+                self.match_heading_quat_w,
+                pos_offset_b,
+            )
+            pos_offset_b = quaternion.rotate_vectors(
+                root_quat_w_inv,
+                pos_offset_b,
+            )
+            self.motion_reference_msg.data[frame_idx].position.x = pos_offset_b[0]
+            self.motion_reference_msg.data[frame_idx].position.y = pos_offset_b[1]
+            self.motion_reference_msg.data[frame_idx].position.z = pos_offset_b[2]
+            quat_b = normalize_quat(root_quat_w_inv * ref_quat_w) # (4,)
+            axisang_b = quaternion.as_rotation_vector(quat_b) # (3,)
+            self.motion_reference_msg.data[frame_idx].axisangle.x = axisang_b[0]
+            self.motion_reference_msg.data[frame_idx].axisangle.y = axisang_b[1]
+            self.motion_reference_msg.data[frame_idx].axisangle.z = axisang_b[2]
+        self.msg_publish_time = self.get_clock().now()
+        self.motion_reference_msg.header.stamp = self.msg_publish_time.to_msg()
+        self.motion_reference_pub.publish(self.motion_reference_msg)
 
     def imu_state_callback(self, msg: IMUState):
         self.imu_state_buffer = msg
