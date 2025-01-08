@@ -462,6 +462,8 @@ class UnitreeRos2Real(Node):
         just like env.step in simulation.
         Thus, the actions has the batch dimension, whose size is 1.
         """
+        # NOTE: Only calling this function currently will update self.action for self._get_last_actions_obs
+        self.actions[:] = actions
         self.action_publisher.publish(Float32MultiArray(data= actions))
         if self.computer_clip_torque:
             clipped_scaled_action = self.clip_by_torque_limit(actions * self.actions_scale)
