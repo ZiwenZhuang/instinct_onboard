@@ -170,6 +170,7 @@ class UnitreeRos2Real(Node):
                         # print(f"Joint {i}({self.sim_joint_names[i]}) has p_gain {self.p_gains[i]} and d_gain {self.d_gains[i]}")
         self.p_gains *= self.kp_factor
         self.d_gains *= self.kd_factor
+        self.get_logger().info("default_joint_pos: {}".format(self.default_joint_pos))
         self.get_logger().info("PD gains are set to: p_gains: {}, d_gains: {}".format(self.p_gains, self.d_gains))
         self.get_logger().info("PD gains are set by kp_factor: {}, kd_factor: {}".format(self.kp_factor, self.kd_factor))
         self.torque_limits = getattr(robot_cfgs, self.robot_class_name).torque_limits * self.torque_limits_ratio
@@ -466,8 +467,8 @@ class UnitreeRos2Real(Node):
             clipped_scaled_action = self.clip_by_torque_limit(actions * self.actions_scale)
             clipped_joints = np.where(clipped_scaled_action != actions * self.actions_scale)[0]
             if len(clipped_joints) > 0:
-                self.get_logger().warn(f"Computer Clip Torque is True, the following joints are clipped: {clipped_joints}", throttle_duration_sec= 5)
-                self.debug_msg_publisher.publish(String(data= f"Computer Clip Torque is True, the following joints are clipped: {clipped_joints}"))
+                self.get_logger().warn(f"Computer Clip Torque is True, the following joints (sim) are clipped: {clipped_joints}", throttle_duration_sec= 5)
+                self.debug_msg_publisher.publish(String(data= f"Computer Clip Torque is True, the following joints (sim) are clipped: {clipped_joints}"))
         else:
             self.get_logger().warn("Computer Clip Torque is False, the robot may be damaged.", throttle_duration_sec= 5)
             clipped_scaled_action = actions * self.actions_scale
