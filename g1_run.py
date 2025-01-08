@@ -139,6 +139,7 @@ class G1Node(UnitreeRos2Real):
                 else self.default_motion_ref_length,
             dtype= np.float32,
         )
+        # create motion reference buffer (NOTE: dof_pos_ref part is after substraction by default_joint_pos)
         self.motion_ref_buffer = np.zeros(
             (
                 self.cfg["scene"]["motion_reference"]["num_frames"] if self.default_motion_ref_length is None else self.default_motion_ref_length,
