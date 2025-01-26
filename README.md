@@ -25,7 +25,12 @@ source instinct_venv/bin/activate
 3. Install crc module
 Follow the instruction of [crc_module](https://github.com)
 
-4. Some onboard python packages through pip
+4. Make sure mcap storage for ros2 installed
+```bash
+sudo apt install ros-{ROS_VERSION}-rosbag2-storage-mcap
+```
+
+5. Some onboard python packages through pip
 ```bash
 pip install numpy-quaternion numpy==1.24.4 transformations==2022.9.26
 ```
