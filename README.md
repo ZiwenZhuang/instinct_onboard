@@ -7,6 +7,7 @@ The code for running network onboard of Unitree G1's Jetson Orin NX
 - Ubuntu 20.04
 - ROS2 Foxy
 - unitree_hg ros messages
+- unitree_go ros messages (for wireless controller)
 
 ### Installation
 1. JetPack
@@ -23,7 +24,7 @@ source instinct_venv/bin/activate
 ```
 
 3. Install crc module
-Follow the instruction of [crc_module](https://github.com)
+Follow the instruction of [crc_module](https://github.com/ZiwenZhuang/g1_crc)
 
 4. Make sure mcap storage for ros2 installed
 ```bash

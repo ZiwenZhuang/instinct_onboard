@@ -1,4 +1,3 @@
-import os, sys
 
 import rclpy
 from rclpy.node import Node
@@ -11,73 +10,26 @@ from unitree_hg.msg import (
 )
 from unitree_go.msg import WirelessController
 from std_msgs.msg import String, Float32MultiArray
-# sys.path.append(os.path.dirname(os.path.abspath(__file__)))
-from crc_module import get_crc
-import robot_cfgs
 
-from multiprocessing import Process
-from collections import OrderedDict
+from crc_module import get_crc
+import instinct_onboard.robot_cfgs as robot_cfgs
+
 import numpy as np
-import quaternion
-# import torch
 import re
 
-# @torch.jit.script
-# def quat_from_euler_xyz(roll, pitch, yaw):
-#     """ roll, pitch, yaw in radians. quaterion in x, y, z, w order """
-#     cy = torch.cos(yaw * 0.5)
-#     sy = torch.sin(yaw * 0.5)
-#     cr = torch.cos(roll * 0.5)
-#     sr = torch.sin(roll * 0.5)
-#     cp = torch.cos(pitch * 0.5)
-#     sp = torch.sin(pitch * 0.5)
+from instinct_onboard import utils
 
-#     qw = cy * cr * cp + sy * sr * sp
-#     qx = cy * sr * cp - sy * cr * sp
-#     qy = cy * cr * sp + sy * sr * cp
-#     qz = sy * cr * cp - cy * sr * sp
-
-#     return torch.stack([qx, qy, qz, qw], dim=-1)
-
-# @torch.jit.script
-# def quat_rotate_inverse(q, v):
-#     """ q must be in x, y, z, w order """
-#     shape = q.shape
-#     q_w = q[:, -1]
-#     q_vec = q[:, :3]
-#     a = v * (2.0 * q_w ** 2 - 1.0).unsqueeze(-1)
-#     b = torch.cross(q_vec, v, dim=-1) * q_w.unsqueeze(-1) * 2.0
-#     c = q_vec * \
-#         torch.bmm(q_vec.view(shape[0], 1, 3), v.view(
-#             shape[0], 3, 1)).squeeze(-1) * 2.0
-#     return a - b + c
-
-def quat_rotate_inverse(q: np.quaternion, v: np.array):
-    """ q must be numpy-quaternion object in w, x, y, z order
-    NOTE: non-batchwise version
-    """
-    q_inv = q.conjugate()
-    return quaternion.rotate_vectors(q_inv, v)
-
-class UnitreeRos2Real(Node):
-    """ A proxy implementation of the real G1 robot.
-    NOTE: different from go2 version, this class process all data in non-batchwise way.
+class Ros2Real(Node):
+    """ This is the basic implementaiton of handling ROS messages matching the design of IsaacLab.
+    It is designed to be used in the script directly to run the ONNX function. But please handle the
+    impl of combining observations in the agent implementation.
     """
     def __init__(self,
-            low_state_topic= "/lowstate",
-            low_cmd_topic= "/lowcmd",
-            imu_state_topic="/secondary_imu",
-            joy_stick_topic= "/wirelesscontroller",
-            cfg= dict(),
-            lin_vel_deadband= 0.1,
-            ang_vel_deadband= 0.1,
-            cmd_px_range= [0.4, 1.0], # check joy_stick_callback (p for positive, n for negative)
-            cmd_nx_range= [0.4, 0.8], # check joy_stick_callback (p for positive, n for negative)
-            cmd_py_range= [0.4, 0.8], # check joy_stick_callback (p for positive, n for negative)
-            cmd_ny_range= [0.4, 0.8], # check joy_stick_callback (p for positive, n for negative)
-            cmd_pyaw_range= [0.4, 1.6], # check joy_stick_callback (p for positive, n for negative)
-            cmd_nyaw_range= [0.4, 1.6], # check joy_stick_callback (p for positive, n for negative)
-            move_by_wireless_remote= False, # if True, the robot will be controlled by a wireless remote
+            low_state_topic: str = '/lowstate',
+            low_cmd_topic: str = '/lowcmd',
+            imu_state_topic: str = "/secondary_imu",
+            joy_stick_topic: str = "/wirelesscontroller",
+            cfg: dict = dict(), # default env cfg to read from. Typically from a env.yaml in your logdir
             computer_clip_torque= True, # if True, the actions will be clipped by torque limits
             joint_pos_protect_ratio= 1.5, # if the joint_pos is out of the range of this ratio, the process will shutdown.
             kp_factor= 1.0, # the factor to multiply the p_gain
@@ -86,7 +38,7 @@ class UnitreeRos2Real(Node):
             robot_class_name= "G1_29Dof",
             dryrun= True, # if True, the robot will not send commands to the real robot
         ):
-        super().__init__("unitree_ros2_real")
+        super().__init__('unitree_ros_real')
         self.NUM_JOINTS = getattr(robot_cfgs, robot_class_name).NUM_JOINTS
         self.NUM_ACTIONS = getattr(robot_cfgs, robot_class_name).NUM_ACTIONS
         self.low_state_topic = low_state_topic
@@ -95,15 +47,6 @@ class UnitreeRos2Real(Node):
         self.low_cmd_topic = low_cmd_topic if not dryrun else low_cmd_topic + "_dryrun_" + str(np.random.randint(0, 65535))
         self.joy_stick_topic = joy_stick_topic
         self.cfg = cfg
-        self.lin_vel_deadband = lin_vel_deadband
-        self.ang_vel_deadband = ang_vel_deadband
-        self.cmd_px_range = cmd_px_range
-        self.cmd_nx_range = cmd_nx_range
-        self.cmd_py_range = cmd_py_range
-        self.cmd_ny_range = cmd_ny_range
-        self.cmd_pyaw_range = cmd_pyaw_range
-        self.cmd_nyaw_range = cmd_nyaw_range
-        self.move_by_wireless_remote = move_by_wireless_remote
         self.computer_clip_torque = computer_clip_torque
         self.joint_pos_protect_ratio = joint_pos_protect_ratio
         self.kp_factor = kp_factor
@@ -112,6 +55,7 @@ class UnitreeRos2Real(Node):
         self.robot_class_name = robot_class_name
         self.dryrun = dryrun
 
+        # load robot-specific configurations
         self.joint_map = getattr(robot_cfgs, robot_class_name).joint_map
         self.sim_joint_names = getattr(robot_cfgs, robot_class_name).sim_joint_names
         self.real_joint_names = getattr(robot_cfgs, robot_class_name).real_joint_names
@@ -122,21 +66,10 @@ class UnitreeRos2Real(Node):
         self.parse_config()
 
     def parse_config(self):
-        """ Parse, set attributes from config dict, initialize buffers to speed up the computation """
+        """Parse, set attributes from config dict, initialize buffers to speed up the computation """
         self.up_axis_idx = 2 # 2 for z, 1 for y -> adapt gravity accordingly
         self.gravity_vec = np.zeros(3)
         self.gravity_vec[self.up_axis_idx] = -1
-        
-        # observations
-        self.obs_clip = dict()
-        self.obs_scales = dict()
-        for obs_names, obs_config in self.cfg["observations"]["policy"].items():
-            if obs_names == "concatenate_terms" or obs_names == "enable_corruption":
-                continue
-            if obs_config.get("clip", None) is not None:
-                self.obs_clip[obs_names] = obs_config["clip"]
-            if obs_config.get("scale", None) is not None:
-                self.obs_scales[obs_names] = obs_config["scale"]
 
         # controls
         self.default_joint_pos = np.zeros(self.NUM_JOINTS, dtype=np.float32)
@@ -181,7 +114,7 @@ class UnitreeRos2Real(Node):
         self.joint_vel_ = np.zeros(self.NUM_JOINTS, dtype=np.float32)
         
         # actions
-        self.actions_scale = np.zeros(self.NUM_ACTIONS, dtype=np.float32)
+        self.action_scale = np.zeros(self.NUM_ACTIONS, dtype=np.float32)
         for action_names, action_config in self.cfg["actions"].items():
             if not action_config["asset_name"] == "robot":
                 continue
@@ -189,8 +122,8 @@ class UnitreeRos2Real(Node):
                 name = self.sim_joint_names[i]
                 for _, joint_name_expr in enumerate(action_config["joint_names"]):
                     if re.search(joint_name_expr, name):
-                        self.actions_scale[i] = action_config["scale"]
-                        # print("Joint {}({}) has action scale {}".format(i, name, self.actions_scale[i]))
+                        self.action_scale[i] = action_config["scale"]
+                        # print("Joint {}({}) has action scale {}".format(i, name, self.action_scale[i]))
                     if not action_config["use_default_offset"]:
                         # not using articulation.default_joint_pos as default offset
                         if isinstance(action_config["offset"], dict):
@@ -211,19 +144,13 @@ class UnitreeRos2Real(Node):
     def start_ros_handlers(self):
         """ After initializing the env and policy, register ros related callbacks and topics
         """
-
         # ROS publishers
-        self.debug_msg_publisher = self.create_publisher(
-            String,
-            "/debug_msg",
-            1
-        )
         self.action_publisher = self.create_publisher(
             Float32MultiArray,
             "/raw_actions",
             1
         )
-        self.low_cmd_pub = self.create_publisher(
+        self.low_cmd_publisher = self.create_publisher(
             LowCmd,
             self.low_cmd_topic,
             1
@@ -232,31 +159,24 @@ class UnitreeRos2Real(Node):
         self.low_cmd_buffer.mode_pr = self.mode_pr
 
         # ROS subscribers
-        self.low_state_sub = self.create_subscription(
+        self.low_state_subscriber = self.create_subscription(
             LowState,
             self.low_state_topic,
             self._low_state_callback,
             1
         )
-        self.torso_imu_sub = self.create_subscription(
+        self.torso_imu_subscriber = self.create_subscription(
             IMUState,
             self.imu_state_topic,
             self._torso_imu_state_callback,
             1
         )
-        self.joy_stick_sub = self.create_subscription(
+        self.joy_stick_subscriber = self.create_subscription(
             WirelessController,
             self.joy_stick_topic,
             self._joy_stick_callback,
             1
         )
-
-        self.debug_msg_publisher.publish(String(
-            data= f"ROS handlers starting, kp: {self.p_gains}, kd: {self.d_gains}, torque_limits: {self.torque_limits}"
-        ))
-        self.debug_msg_publisher.publish(String(
-            data= f"Using kp_factor: {self.kp_factor}, kd_factor: {self.kd_factor}, torque_limits_ratio: {self.torque_limits_ratio}"
-        ))
         self.get_logger().info("ROS handlers started, waiting to recieve critical low state and wireless controller messages.")
         if not self.dryrun:
             self.get_logger().warn(f"You are running the code in no-dryrun mode and publishing to '{self.low_cmd_topic}', Please keep safe.")
@@ -264,9 +184,20 @@ class UnitreeRos2Real(Node):
             self.get_logger().warn(f"You are publishing low cmd to '{self.low_cmd_topic}' because of dryrun mode, Please check and be safe.")
         while rclpy.ok():
             rclpy.spin_once(self)
-            if hasattr(self, "low_state_buffer") and hasattr(self, "joy_stick_buffer"):
+            if self.check_buffers_ready():
                 break
-        self.get_logger().info("Low state message received, the robot is ready to go.")
+        self.get_logger().info("All necessary buffers received, the robot is ready to go.")
+
+    def check_buffers_ready(self):
+        """Check if all the necesary buffers are ready to use. Only used at the the end of the start_ros_handlers."""
+        buffer_ready = hasattr(self, "low_state_buffer") and hasattr(self, "joy_stick_buffer")
+        if self.imu_state_topic is not None:
+            buffer_ready = buffer_ready and hasattr(self, "torso_imu_buffer")
+        return buffer_ready
+    
+    def get_cfg_main_loop_duration(self):
+        """Get the main running frequency based on self.cfg, which is typically from env.yaml."""
+        return self.cfg["sim"]["dt"] * self.cfg["decimation"]
 
     """
     ROS callbacks and handlers that update the buffer
@@ -274,6 +205,7 @@ class UnitreeRos2Real(Node):
 
     def _low_state_callback(self, msg):
         """ store and handle proprioception data """
+        self.get_logger().info("Low state data received.", once=True)
         self.low_state_buffer = msg # keep the latest low state
         self.low_cmd_buffer.mode_machine = msg.mode_machine
 
@@ -290,7 +222,6 @@ class UnitreeRos2Real(Node):
             if self.joint_pos_[sim_idx] > self.joint_pos_protect_high[sim_idx] or \
                 self.joint_pos_[sim_idx] < self.joint_pos_protect_low[sim_idx]:
                 self.get_logger().error(f"Joint {sim_idx}(sim), {real_idx}(real) position out of range at {self.low_state_buffer.motor_state[real_idx].q}")
-                self.debug_msg_publisher.publish(String(data= f"Joint {sim_idx}(sim), {real_idx}(real) position out of range at {self.low_state_buffer.motor_state[real_idx].q}"))
                 self.get_logger().error("The motors and this process shuts down.")
                 self._turn_off_motors()
                 raise SystemExit()
@@ -301,39 +232,8 @@ class UnitreeRos2Real(Node):
         self.torso_imu_buffer = msg
 
     def _joy_stick_callback(self, msg):
+        self.get_logger().info("Wireless controller data received.", once=True)
         self.joy_stick_buffer = msg
-        if self.move_by_wireless_remote:
-            # left-y for forward/backward
-            ly = msg.ly
-            if ly > self.lin_vel_deadband:
-                vx = (ly - self.lin_vel_deadband) / (1 - self.lin_vel_deadband) # (0, 1)
-                vx = vx * (self.cmd_px_range[1] - self.cmd_px_range[0]) + self.cmd_px_range[0]
-            elif ly < -self.lin_vel_deadband:
-                vx = (ly + self.lin_vel_deadband) / (1 - self.lin_vel_deadband) # (-1, 0)
-                vx = vx * (self.cmd_nx_range[1] - self.cmd_nx_range[0]) - self.cmd_nx_range[0]
-            else:
-                vx = 0
-            # left-x for turning left/right
-            lx = -msg.lx
-            if lx > self.ang_vel_deadband:
-                yaw = (lx - self.ang_vel_deadband) / (1 - self.ang_vel_deadband)
-                yaw = yaw * (self.cmd_pyaw_range[1] - self.cmd_pyaw_range[0]) + self.cmd_pyaw_range[0]
-            elif lx < -self.ang_vel_deadband:
-                yaw = (lx + self.ang_vel_deadband) / (1 - self.ang_vel_deadband)
-                yaw = yaw * (self.cmd_nyaw_range[1] - self.cmd_nyaw_range[0]) - self.cmd_nyaw_range[0]
-            else:
-                yaw = 0
-            # right-x for side moving left/right
-            rx = -msg.rx
-            if rx > self.lin_vel_deadband:
-                vy = (rx - self.lin_vel_deadband) / (1 - self.lin_vel_deadband)
-                vy = vy * (self.cmd_py_range[1] - self.cmd_py_range[0]) + self.cmd_py_range[0]
-            elif rx < -self.lin_vel_deadband:
-                vy = (rx + self.lin_vel_deadband) / (1 - self.lin_vel_deadband)
-                vy = vy * (self.cmd_ny_range[1] - self.cmd_ny_range[0]) - self.cmd_ny_range[0]
-            else:
-                vy = 0
-            self.xyyaw_command = np.array([vx, vy, yaw], dtype=np.float32)
 
         # refer to Unitree Remote Control data structure, msg.keys is a bit mask
         # 00000000 00000001 means pressing the 0-th button (R1)
@@ -344,19 +244,16 @@ class UnitreeRos2Real(Node):
             self._turn_off_motors()
             raise SystemExit()
 
-    def _forward_depth_callback(self, msg):
-        """ store and handle depth camera data """
-        pass
-
-    def _forward_depth_embedding_callback(self, msg):
-        self.forward_depth_embedding_buffer = np.array(msg.data)
-
     """
     Refresh observation buffer and corresponding sub-functions
     """
 
-    def _get_lin_vel_obs(self):
-        return np.zeros(3, dtype=np.float32)
+    def _get_quat_w_obs(self):
+        """ Get the quaternion in wxyz format from the torso IMU or low state buffer."""
+        if hasattr(self, "torso_imu_buffer"):
+            return np.array(self.torso_imu_buffer.quaternion, dtype=np.float32)
+        else:
+            return np.array(self.low_state_buffer.imu_state.quaternion, dtype=np.float32)
     
     def _get_ang_vel_obs(self):
         if hasattr(self, "torso_imu_buffer"):
@@ -379,15 +276,15 @@ class UnitreeRos2Real(Node):
                 self.low_state_buffer.imu_state.quaternion[2],
                 self.low_state_buffer.imu_state.quaternion[3],
             )
-        return quat_rotate_inverse(
+        return utils.quat_rotate_inverse(
             quat_wxyz,
             self.gravity_vec,
         ).astype(np.float32)
 
-    def _get_commands_obs(self):
-        return self.xyyaw_command
-
     def _get_joint_pos_obs(self):
+        return self.joint_pos_
+    
+    def _get_joint_pos_rel_obs(self):
         return self.joint_pos_ - self.default_joint_pos
 
     def _get_joint_vel_obs(self):
@@ -395,51 +292,6 @@ class UnitreeRos2Real(Node):
 
     def _get_last_actions_obs(self):
         return self.actions
-    
-    def get_num_obs_from_components(self, components):
-        obs_segments = self.get_obs_segment_from_components(components)
-        num_obs = 0
-        for k, v in obs_segments.items():
-            num_obs += np.prod(v)
-        return num_obs
-        
-    def get_obs_segment_from_components(self, components):
-        """ Observation segment is defined as a list of lists/ints defining the tensor shape with
-        corresponding order.
-        """
-        segments = OrderedDict()
-        if "lin_vel" in components:
-            print("Warning: lin_vel is not typically available or accurate enough on the real robot. Will return zeros.")
-            segments["lin_vel"] = (3,)
-        if "ang_vel" in components:
-            segments["ang_vel"] = (3,)
-        if "projected_gravity" in components:
-            segments["projected_gravity"] = (3,)
-        if "commands" in components:
-            segments["commands"] = (3,)
-        if "joint_pos" in components:
-            segments["joint_pos"] = (self.NUM_JOINTS,)
-        if "joint_vel" in components:
-            segments["joint_vel"] = (self.NUM_JOINTS,)
-        if "last_actions" in components:
-            segments["last_actions"] = (self.NUM_ACTIONS,)
-        
-        return segments
-    
-    def get_obs(self, obs_segments= None):
-        """ Extract from the buffers and build the 1d observation tensor
-        Each get ... obs function does not do the obs_scale multiplication.
-        NOTE: obs_buffer has the batch dimension, whose size is 1.
-        """
-        if obs_segments is None:
-            obs_segments = self.obs_segments
-        obs_buffer = []
-        for k, v in obs_segments.items():
-            obs_component_value = getattr(self, "_get_" + k + "_obs")() * self.obs_scales.get(k, 1.0)
-            obs_buffer.append(obs_component_value)
-        obs_buffer = np.concatenate(obs_buffer)
-        obs_buffer = np.clip(obs_buffer, -self.obs_clip, self.obs_clip)
-        return obs_buffer
 
     """
     Control related functions
@@ -466,14 +318,13 @@ class UnitreeRos2Real(Node):
         self.actions[:] = actions
         self.action_publisher.publish(Float32MultiArray(data= actions))
         if self.computer_clip_torque:
-            clipped_scaled_action = self.clip_by_torque_limit(actions * self.actions_scale)
-            clipped_joints = np.where(clipped_scaled_action != actions * self.actions_scale)[0]
+            clipped_scaled_action = self.clip_by_torque_limit(actions * self.action_scale)
+            clipped_joints = np.where(clipped_scaled_action != actions * self.action_scale)[0]
             if len(clipped_joints) > 0:
                 self.get_logger().warn(f"Computer Clip Torque is True, the following joints (sim) are clipped: {clipped_joints}", throttle_duration_sec= 5)
-                self.debug_msg_publisher.publish(String(data= f"Computer Clip Torque is True, the following joints (sim) are clipped: {clipped_joints}"))
         else:
             self.get_logger().warn("Computer Clip Torque is False, the robot may be damaged.", throttle_duration_sec= 5)
-            clipped_scaled_action = actions * self.actions_scale
+            clipped_scaled_action = actions * self.action_scale
         robot_coordinates_action = clipped_scaled_action + self.default_joint_pos
         if np.isnan(actions).any():
             self.get_logger().error("Actions contain NaN, Skip sending the action to the robot.")
@@ -481,7 +332,7 @@ class UnitreeRos2Real(Node):
         self._publish_legs_cmd(robot_coordinates_action)
 
     """
-    functions that actually publish the commands and take effect
+    Functions that actually publish the commands and take effect
     """
 
     def _publish_legs_cmd(self, robot_coordinates_action: np.array):
@@ -500,10 +351,9 @@ class UnitreeRos2Real(Node):
         
         self.low_cmd_buffer.crc = get_crc(self.low_cmd_buffer)
         if np.isnan(robot_coordinates_action).any():
-            self.get_logger().error("Robot coordinates action contain NaN, Skip sending the action to the robot.", throttle_duration_sec= 2)
-            self.debug_msg_publisher.publish(String(data= "Robot coordinates action contain NaN, Skip sending the action to the robot."))
+            self.get_logger().error("Robot coordinates action contain NaN, Skip sending the action to the robot.")
             return
-        self.low_cmd_pub.publish(self.low_cmd_buffer)
+        self.low_cmd_publisher.publish(self.low_cmd_buffer)
 
     def _turn_off_motors(self):
         """ Turn off the motors """
@@ -516,4 +366,4 @@ class UnitreeRos2Real(Node):
             self.low_cmd_buffer.motor_cmd[real_idx].kp = 0.
             self.low_cmd_buffer.motor_cmd[real_idx].kd = 0.
         self.low_cmd_buffer.crc = get_crc(self.low_cmd_buffer)
-        self.low_cmd_pub.publish(self.low_cmd_buffer)
+        self.low_cmd_publisher.publish(self.low_cmd_buffer)
