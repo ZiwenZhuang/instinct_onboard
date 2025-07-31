@@ -1,16 +1,16 @@
-from setuptools import setup, find_packages
+from setuptools import find_packages, setup
 
 setup(
-    name='instinct_onboard',
-    version='0.1.0',
-    packages=find_packages(exclude=['scripts', 'tests']),
+    name="instinct_onboard",
+    version="0.1.0",
+    packages=find_packages(exclude=["scripts", "tests"]),
     install_requires=[
-        'numpy',
-        'numpy-quaternion',
-        'pyyaml',
+        "numpy",
+        "numpy-quaternion",
+        "pyyaml",
         # 'rclpy',
-        'transformations',
-        'onnxruntime',
+        "transformations",
+        "onnxruntime",
     ],
     zip_safe=True,
 )

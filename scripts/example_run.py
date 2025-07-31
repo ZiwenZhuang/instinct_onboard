@@ -1,9 +1,10 @@
 import os
-import yaml
-import rclpy
 
-from instinct_onboard.ros_nodes.ros_real import Ros2Real
+import rclpy
+import yaml
+
 from instinct_onboard.agents.base import ColdStartAgent
+from instinct_onboard.ros_nodes.ros_real import Ros2Real
 
 
 class ExampleNode(Ros2Real):
@@ -24,17 +25,17 @@ class ExampleNode(Ros2Real):
         # You can also call agent methods here if needed.
         action, done = self.agent.step()
         self.send_action(action)
-        
+
 
 def main(args):
     """Main function to run the example ROS node."""
     rclpy.init()
-    
+
     logdir = os.path.expanduser(args.logdir)
-    with open(os.path.join(logdir, "params", "env.yaml"), "r") as f:
+    with open(os.path.join(logdir, "params", "env.yaml")) as f:
         cfg = yaml.unsafe_load(f)
     node = ExampleNode(cfg=cfg, dryrun=not args.nodryrun)
-    
+
     agent = ColdStartAgent(startup_step_size=0.2, ros_node=node)
     node.agent = agent
 
@@ -48,13 +49,18 @@ def main(args):
     finally:
         rclpy.shutdown()
 
+
 if __name__ == "__main__":
     from argparse import ArgumentParser
+
     parser = ArgumentParser(description="Run the example ROS node.")
-    parser.add_argument("--logdir", type=str, default=os.path.expanduser("~/instinct_onboard/logs/example"),
-                        help="The directory to store logs and models.")
-    parser.add_argument("--nodryrun", action="store_true",
-                        help="If set, the node will run without dry run mode.")
+    parser.add_argument(
+        "--logdir",
+        type=str,
+        default=os.path.expanduser("~/instinct_onboard/logs/example"),
+        help="The directory to store logs and models.",
+    )
+    parser.add_argument("--nodryrun", action="store_true", help="If set, the node will run without dry run mode.")
     args = parser.parse_args()
     main(args=args)
 #     # This is a simple example of how to run a ROS node with an agent.

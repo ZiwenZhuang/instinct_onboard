@@ -6,8 +6,8 @@ from typing import Tuple
 import numpy as np
 import yaml
 
-from instinct_onboard.utils import CircularBuffer
 from instinct_onboard.ros_nodes.ros_real import Ros2Real
+from instinct_onboard.utils import CircularBuffer
 
 
 class OnboardAgent(ABC):

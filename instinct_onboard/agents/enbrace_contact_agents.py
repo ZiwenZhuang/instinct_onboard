@@ -1,24 +1,25 @@
 from __future__ import annotations
 
 import os
+
 import numpy as np
 import onnxruntime as ort
-
 import rosbag2_py
 from geometry_msgs.msg import PoseArray
-from motion_target_msgs.msg import MotionSequence
 
 from instinct_onboard.agents.base import OnboardAgent
 from instinct_onboard.ros_nodes.ros_real import Ros2Real
+from motion_target_msgs.msg import MotionSequence
+
 
 class EmbraceContactAgent(OnboardAgent):
-
-    def __init__(self,
-            logdir: str,
-            ros_node: Ros2Real,
-            motion_reference_topic: str="/motion_reference",
-            pose_w_reference_topic: str="/global_rotation_reference",
-        ):
+    def __init__(
+        self,
+        logdir: str,
+        ros_node: Ros2Real,
+        motion_reference_topic: str = "/motion_reference",
+        pose_w_reference_topic: str = "/global_rotation_reference",
+    ):
         super().__init__(logdir, ros_node)
         self.ort_sessions = dict()
         self.motion_reference_topic = motion_reference_topic
@@ -56,6 +57,7 @@ class EmbraceContactAgent(OnboardAgent):
     """
     Agent specific observation functions for Embrace Contact Agent.
     """
+
     def _get_time_to_target_obs(self):
         pass
 
@@ -89,12 +91,13 @@ class EmbraceContactAgent(OnboardAgent):
     """
     Functions to handle the motion sequence from the rosbag.
     """
+
     def reset_rosbag_reader(self):
         """Initialize the rosbag reader to read the motion sequence."""
         self.bag_reader.reset()
         self.bag_reader.seek(0)
         assert self.bag_reader.has_next(), "No messages in the rosbag"
-        
+
         topic_collected_mask = [False, False]  # [motion_reference, pose_w_reference]
         while not all(topic_collected_mask):
             # read next message
