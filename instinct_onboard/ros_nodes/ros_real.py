@@ -146,20 +146,20 @@ class Ros2Real(Node):
     def start_ros_handlers(self):
         """After initializing the env and policy, register ros related callbacks and topics"""
         # ROS publishers
-        self.action_publisher = self.create_publisher(Float32MultiArray, "/raw_actions", 1)
-        self.low_cmd_publisher = self.create_publisher(LowCmd, self.low_cmd_topic, 1)
+        self.action_publisher = self.create_publisher(Float32MultiArray, "/raw_actions", 10)
+        self.low_cmd_publisher = self.create_publisher(LowCmd, self.low_cmd_topic, 10)
         self.low_cmd_buffer = LowCmd()
         self.low_cmd_buffer.mode_pr = self.mode_pr
 
         # ROS subscribers
         self.low_state_subscriber = self.create_subscription(
-            LowState, self.low_state_topic, self._low_state_callback, 1
+            LowState, self.low_state_topic, self._low_state_callback, 10
         )
         self.torso_imu_subscriber = self.create_subscription(
-            IMUState, self.imu_state_topic, self._torso_imu_state_callback, 1
+            IMUState, self.imu_state_topic, self._torso_imu_state_callback, 10
         )
         self.joy_stick_subscriber = self.create_subscription(
-            WirelessController, self.joy_stick_topic, self._joy_stick_callback, 1
+            WirelessController, self.joy_stick_topic, self._joy_stick_callback, 10
         )
         self.get_logger().info(
             "ROS handlers started, waiting to receive critical low state and wireless controller messages."
