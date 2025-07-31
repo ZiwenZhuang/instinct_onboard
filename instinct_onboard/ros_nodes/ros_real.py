@@ -105,9 +105,7 @@ class Ros2Real(Node):
         self.d_gains *= self.kd_factor
         self.get_logger().info(f"default_joint_pos: {self.default_joint_pos}")
         self.get_logger().info(f"PD gains are set to: p_gains: {self.p_gains}, d_gains: {self.d_gains}")
-        self.get_logger().info(
-            f"PD gains are set by kp_factor: {self.kp_factor}, kd_factor: {self.kd_factor}"
-        )
+        self.get_logger().info(f"PD gains are set by kp_factor: {self.kp_factor}, kd_factor: {self.kd_factor}")
         self.torque_limits = getattr(robot_cfgs, self.robot_class_name).torque_limits * self.torque_limits_ratio
         self.get_logger().info(f"Torque limits are set by ratio of : {self.torque_limits_ratio}")
 
@@ -247,6 +245,7 @@ class Ros2Real(Node):
 
     """
     Refresh observation buffer and corresponding sub-functions
+    NOTE: everything will be NON-batchwise. There is NO batch dimension in the observation.
     """
 
     def _get_quat_w_obs(self):
