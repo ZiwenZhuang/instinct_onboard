@@ -4,7 +4,7 @@ import os
 
 import numpy as np
 import onnxruntime as ort
-import rosbag2_py
+import quaternion
 import yaml
 from geometry_msgs.msg import PoseArray
 
@@ -18,13 +18,11 @@ class ShadowingAgent(OnboardAgent):
         self,
         logdir: str,
         ros_node: Ros2Real,
-        motion_reference_topic: str = "/motion_reference",
     ):
         super().__init__(logdir, ros_node)
         self.ort_sessions = dict()
-        self.motion_reference_topic = motion_reference_topic
         self._parse_obs_config()
-        self._load_model()
+        self._load_models()
 
     def _parse_obs_config(self):
         super()._parse_obs_config()
@@ -36,36 +34,36 @@ class ShadowingAgent(OnboardAgent):
         self.proprio_obs_names = [obs_name for obs_name in all_obs_names if obs_name not in self.motion_ref_obs_names]
         self.ros_node.get_logger().info(f"ShadowingAgent proprioception observation names: {self.proprio_obs_names}")
 
-    def _load_model(self):
+    def _load_models(self):
         """Load the ONNX model for the agent."""
         # load ONNX models
-        actor_path = os.path.join(self.logdir, "models", "actor.onnx")
-        self.ort_sessions["actor"] = ort.InferenceSession(actor_path)
-        motion_ref_path = os.path.join(self.logdir, "models", "0-motion_ref.onnx")
-        self.ort_sessions["motion_ref"] = ort.InferenceSession(motion_ref_path)
+        ort_execution_providers = ort.get_available_providers()
+        actor_path = os.path.join(self.logdir, "exported", "actor.onnx")
+        self.ort_sessions["actor"] = ort.InferenceSession(actor_path, providers=ort_execution_providers)
+        motion_ref_path = os.path.join(self.logdir, "exported", "0-motion_ref.onnx")
+        self.ort_sessions["motion_ref"] = ort.InferenceSession(motion_ref_path, providers=ort_execution_providers)
+        fk_path = os.path.join(self.logdir, "exported", "forward_kinematics.onnx")
+        self.ort_sessions["fk"] = ort.InferenceSession(fk_path, providers=ort_execution_providers)
         print(f"Loaded ONNX models from {self.logdir}")
-        # load motion sequence as rosbag
-        motion_seq_path = os.path.join(
-            self.logdir, "rosbag", "model_145000_CMU-140-08_0", "model_145000_CMU-140-08_0.mcap"
-        )
-        self.bag_reader = rosbag2_py.SequentialReader()
-        self.bag_reader.open(
-            rosbag2_py.StorageOptions(uri=motion_seq_path, storage_id="mcap"),
-            rosbag2_py.ConverterOptions(
-                input_serialization_format="cdr",
-                output_serialization_format="cdr",
-            ),
-        )
+
+    def _update_links_poses(self):
+        """Update the current link positions based on self.ros_node.joint_pos_."""
+        # get the current joint positions
+        joint_pos = self.ros_node.joint_pos_
+        # run forward kinematics to get the link positions
+        fk_input_name = self.ort_sessions["fk"].get_inputs()[0].name
+        output = self.ort_sessions["fk"].run(None, {fk_input_name: joint_pos})
+        link_pos, link_quat = output[0], output[1]  # link_pos: (num_links, 3), link_quat: (num_links, 4)
+        self.link_pos_ = link_pos
+        self.link_quat_ = link_quat
 
     def reset(self):
         """Reset the agent state and the rosbag reader."""
-        self.reset_rosbag_reader()
-        self.motion_reference_buffer = None
-        self.pose_w_reference_buffer = None
+        pass
 
     def step(self):
         """Perform a single step of the agent."""
-        self.advance_rosbag_reader()
+        self._update_links_poses()
         # due to the model which reads the motion sequence, and then concat at the end of the proioception vector, we get obs term one by one.
 
         # pack all motion sequence obs term
@@ -102,76 +100,84 @@ class ShadowingAgent(OnboardAgent):
     Agent specific observation functions for Shadowing Agent.
     """
 
-    def _get_time_to_target_obs(self):
-        pass
+    def _get_time_to_target_obs(self) -> np.ndarray:
+        """Return shape: (1, num_frames)"""
+        return self.ros_node.packed_motion_sequence_buffer["time_to_target"].reshape(-1, 1)  # (num_frames, 1)
 
     def _get_time_from_ref_update_obs(self):
-        pass
-
-    def _get_pose_ref_obs(self):
-        pass
+        return np.array(
+            [
+                (self.ros_node.get_clock().now().nanoseconds - self.ros_node.motion_sequence_receive_time.nanoseconds)
+                / 1e9
+            ]
+            * self.ros_node.packed_motion_sequence_buffer["time_to_target"].shape[0],
+            dtype=np.float32,
+        )  # (num_frames,)
 
     def _get_pose_ref_mask_obs(self):
-        pass
+        return np.ones(
+            (self.ros_node.packed_motion_sequence_buffer["time_to_target"].shape[0], 4), dtype=np.float32
+        )  # (num_frames, 4)
 
-    def _get_dof_pos_ref_obs(self):
-        pass
+    def _get_joint_pos_ref_obs(self):
+        """Command, return shape: (num_frames, num_joints)"""
+        return (
+            self.ros_node.packed_motion_sequence_buffer["joint_pos"] - self.ros_node.default_joint_pos[None, :]
+        )  # (num_frames, num_joints)
 
-    def _get_dof_pos_err_ref_obs(self):
-        pass
+    def _get_joint_pos_err_ref_obs(self):
+        """Command, return shape: (num_frames, num_joints)"""
+        return (
+            self.ros_node.packed_motion_sequence_buffer["joint_pos"] - self.ros_node.joint_pos_[None, :]
+        )  # (num_frames, num_joints)
 
-    def _get_dof_pos_mask_obs(self):
-        pass
+    def _get_joint_pos_mask_obs(self):
+        """Command, return shape: (num_frames, num_joints)"""
+        return np.ones_like(
+            self.ros_node.packed_motion_sequence_buffer["joint_pos"],
+            dtype=np.float32,
+        )
 
     def _get_link_pos_ref_obs(self):
-        pass
+        return self.ros_node.packed_motion_sequence_buffer["link_pos"]  # (num_frames, num_links, 3), in robot base link
 
     def _get_link_pos_err_ref_obs(self):
-        pass
+        return (
+            self.ros_node.packed_motion_sequence_buffer["link_pos"] - self.link_pos_[None, :, :]
+        )  # (num_frames, num_links, 3)
 
     def _get_link_ref_mask_obs(self):
-        pass
+        return np.ones(
+            self.ros_node.packed_motion_sequence_buffer["link_pos"].shape[:2],
+            dtype=np.float32,
+        )  # (num_frames, num_links)
 
-    """
-    Functions to handle the motion sequence from the rosbag.
-    """
+    def _get_link_rot_ref_obs(self):
+        return self.ros_node.packed_motion_sequence_buffer[
+            "link_tannorm"
+        ]  # (num_frames, num_links, 6), in robot base link
 
-    def reset_rosbag_reader(self):
-        """Initialize the rosbag reader to read the motion sequence."""
-        self.bag_reader.reset()
-        self.bag_reader.seek(0)
-        assert self.bag_reader.has_next(), "No messages in the rosbag"
+    def _get_link_rot_err_ref_obs(self):
+        link_quat_ref = self.ros_node.packed_motion_sequence_buffer["link_quat"]
+        link_quat_ = self.link_quat_[None, :, :]  # (1, num_links, 4)
+        link_rot_err = quaternion.quaternion_multiply(quaternion.quaternion_conjugate(link_quat_), link_quat_ref)
+        link_tannorm_err = np.concatenate(
+            [
+                quaternion.rotate_vectors(
+                    link_rot_err,
+                    self.ros_node.tannorm_prototype[0][None, :].repeat(link_quat_ref.shape[1], axis=0)[None, :, :],
+                ),  # (num_frames, num_links, 3)
+                quaternion.rotate_vectors(
+                    link_rot_err,
+                    self.ros_node.tannorm_prototype[1][None, :].repeat(link_quat_ref.shape[1], axis=0)[None, :, :],
+                ),  # (num_frames, num_links, 3)
+            ],
+            axis=-1,
+        ).astype(np.float32)
+        return link_tannorm_err  # (num_frames, num_links, 6)
 
-        topic_collected_mask = [False, False]  # [motion_reference, pose_w_reference]
-        while not all(topic_collected_mask):
-            # read next message
-            topic, data, timestamp = self.bag_reader.read_next()
-            if topic == self.motion_reference_topic:
-                self._motion_reference_callback(MotionSequence.deserialize(data))
-                topic_collected_mask[0] = True
-            elif topic == self.pose_w_reference_topic:
-                self._pose_w_reference_callback(PoseArray.deserialize(data))
-                topic_collected_mask[1] = True
-            else:
-                print(f"Skipping topic {topic} in the rosbag")
-
-    # def _motion_reference_callback(self, msg: MotionSequence):
-    #     self.motion_reference_buffer = msg
-
-    # def _pose_w_reference_callback(self, msg):
-    #     self.pose_w_reference_buffer = msg
-
-    # def advance_rosbag_reader(self):
-    #     """Advance the rosbag reader to the next message."""
-    #     if self.bag_reader.has_next():
-    #         topic, data, timestamp = self.bag_reader.read_next()
-    #         if topic == self.motion_reference_topic:
-    #             self._motion_reference_callback(MotionSequence.deserialize(data))
-    #         # elif topic == self.pose_w_reference_topic:
-    #         #     self._pose_w_reference_callback(PoseArray.deserialize(data))
-    #         else:
-    #             print(f"Skipping topic {topic} in the rosbag")
-    #         return True
-    #     else:
-    #         print("No more messages in the rosbag")
-    #         return False
+    def _get_link_rot_mask_obs(self):
+        return np.ones(
+            self.ros_node.packed_motion_sequence_buffer["link_quat"].shape[:2],
+            dtype=np.float32,
+        )  # (num_frames, num_links)
