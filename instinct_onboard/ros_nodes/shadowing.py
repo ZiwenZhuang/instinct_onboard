@@ -39,9 +39,13 @@ class ShadowingNodeMixin:
         time_to_target = np.zeros(num_frames, dtype=np.float32)
         root_pos_b = np.zeros((num_frames, 3), dtype=np.float32)
         root_quat_b = np.zeros((num_frames, 4), dtype=np.float32)
+        pose_mask = np.ones((num_frames, 4), dtype=np.float32)  # (num_frames, 4), for root_pos_b and root_quat_b
         joint_pos = np.zeros((num_frames, num_joints), dtype=np.float32)
+        joint_pos_mask = np.ones((num_frames, num_joints), dtype=np.float32)  # (num_frames, num_joints)
         link_pos = np.zeros((num_frames, num_links, 3), dtype=np.float32)
+        link_pos_mask = np.ones((num_frames, num_links), dtype=np.float32)  # (num_frames, num_links)
         link_quat = np.zeros((num_frames, num_links, 4), dtype=np.float32)
+        link_quat_mask = np.ones((num_frames, num_links), dtype=np.float32)  # (num_frames, num_links, 4)
         for i, frame in enumerate(msg.data):
             time_to_target[i] = frame.time_to_target
             root_pos_b[i] = frame.root_pos_b
@@ -51,12 +55,16 @@ class ShadowingNodeMixin:
             root_quat_b[i, 3] = frame.root_quat_b.w
             for j in range(num_joints):
                 joint_pos[i, j] = frame.joint_pos[j]  # in urdf space, simulation order.
+                joint_pos_mask[i, j] = frame.joint_pos_mask[j]  # (num_frames, num_joints)
             for j in range(num_links):
                 link_pos[i, j] = frame.link_pos[j]
                 link_quat[i, j, 0] = frame.link_quat[j].w
                 link_quat[i, j, 1] = frame.link_quat[j].x
                 link_quat[i, j, 2] = frame.link_quat[j].y
                 link_quat[i, j, 3] = frame.link_quat[j].z
+                link_pos_mask[i, j] = frame.link_pos_mask[j]
+                link_quat_mask[i, j] = frame.link_quat_mask[j]
+            pose_mask[i] = frame.pose_mask  # (4,) for root_pos_b and root_quat_b
         link_tannorm = np.concatenate(
             [
                 quaternion.rotate_vectors(
@@ -76,9 +84,13 @@ class ShadowingNodeMixin:
             "time_to_target": time_to_target,
             "root_pos_b": root_pos_b,
             "root_quat_b": root_quat_b,
+            "pose_mask": pose_mask,
             "joint_pos": joint_pos,
+            "joint_pos_mask": joint_pos_mask,
             "link_pos": link_pos,
+            "link_pos_mask": link_pos_mask,
             "link_quat": link_quat,
+            "link_quat_mask": link_quat_mask,
             "link_tannorm": link_tannorm,
         }
 

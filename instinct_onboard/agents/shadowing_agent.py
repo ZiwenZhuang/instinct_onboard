@@ -115,9 +115,7 @@ class ShadowingAgent(OnboardAgent):
         )  # (num_frames,)
 
     def _get_pose_ref_mask_obs(self):
-        return np.ones(
-            (self.ros_node.packed_motion_sequence_buffer["time_to_target"].shape[0], 4), dtype=np.float32
-        )  # (num_frames, 4)
+        return self.ros_node.packed_motion_sequence_buffer["pose_mask"]  # (num_frames, 4)
 
     def _get_joint_pos_ref_obs(self):
         """Command, return shape: (num_frames, num_joints)"""
@@ -133,10 +131,7 @@ class ShadowingAgent(OnboardAgent):
 
     def _get_joint_pos_mask_obs(self):
         """Command, return shape: (num_frames, num_joints)"""
-        return np.ones_like(
-            self.ros_node.packed_motion_sequence_buffer["joint_pos"],
-            dtype=np.float32,
-        )
+        return self.ros_node.packed_motion_sequence_buffer["joint_pos_mask"]  # (num_frames, num_joints)
 
     def _get_link_pos_ref_obs(self):
         return self.ros_node.packed_motion_sequence_buffer["link_pos"]  # (num_frames, num_links, 3), in robot base link
@@ -146,11 +141,8 @@ class ShadowingAgent(OnboardAgent):
             self.ros_node.packed_motion_sequence_buffer["link_pos"] - self.link_pos_[None, :, :]
         )  # (num_frames, num_links, 3)
 
-    def _get_link_ref_mask_obs(self):
-        return np.ones(
-            self.ros_node.packed_motion_sequence_buffer["link_pos"].shape[:2],
-            dtype=np.float32,
-        )  # (num_frames, num_links)
+    def _get_link_pos_ref_mask_obs(self):
+        return self.ros_node.packed_motion_sequence_buffer["link_pos_mask"]  # (num_frames, num_links)
 
     def _get_link_rot_ref_obs(self):
         return self.ros_node.packed_motion_sequence_buffer[
@@ -177,10 +169,7 @@ class ShadowingAgent(OnboardAgent):
         return link_tannorm_err  # (num_frames, num_links, 6)
 
     def _get_link_rot_mask_obs(self):
-        return np.ones(
-            self.ros_node.packed_motion_sequence_buffer["link_quat"].shape[:2],
-            dtype=np.float32,
-        )  # (num_frames, num_links)
+        return self.ros_node.packed_motion_sequence_buffer["link_rot_mask"]  # (num_frames, num_links)
 
 class MotionAsActAgent(OnboardAgent):
     """An agent that only output joint_pos of motion reference as action.
