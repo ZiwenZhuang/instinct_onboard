@@ -181,3 +181,37 @@ class ShadowingAgent(OnboardAgent):
             self.ros_node.packed_motion_sequence_buffer["link_quat"].shape[:2],
             dtype=np.float32,
         )  # (num_frames, num_links)
+
+class MotionAsActAgent(OnboardAgent):
+    """An agent that only output joint_pos of motion reference as action.
+    If the current joint_pos is far from the motion reference, it will output a scaled version of the difference.
+    """
+    def __init__(
+        self,
+        logdir: str,
+        ros_node: Ros2Real,
+        joint_diff_threshold: float = 0.2,
+        joint_diff_scale: float = 0.2,
+    ):
+        super().__init__(logdir, ros_node)
+        # NO parse_obs_config and _load_models because this agent use hand-coded logic.
+        self.joint_diff_threshold = joint_diff_threshold
+        self.joint_diff_scale = joint_diff_scale
+
+    def reset(self):
+        """Reset the agent state and the rosbag reader."""
+        pass
+
+    def step(self):
+        target_joint_pos = self.ros_node.packed_motion_sequence_buffer["joint_pos"][0]  # (num_joints,)
+        current_joint_pos = self.ros_node.joint_pos_
+        joint_diff = target_joint_pos - current_joint_pos
+        command_joint_pos = target_joint_pos.copy()
+        over_threshold_mask = np.abs(joint_diff) > self.joint_diff_threshold
+        command_joint_pos[over_threshold_mask] = (
+            current_joint_pos[over_threshold_mask] + np.sign(joint_diff[over_threshold_mask]) * self.joint_diff_scale
+        )
+        action = (command_joint_pos - self.ros_node.default_joint_pos) / self.ros_node.action_scale
+        action = action.astype(np.float32)
+        done = not np.any(over_threshold_mask)  # done if all joint positions are within the threshold
+        return action, done
