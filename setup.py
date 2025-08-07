@@ -11,6 +11,7 @@ setup(
         # 'rclpy',
         "transformations",
         "onnxruntime",
+        "empy==3.3.2",
     ],
     zip_safe=True,
 )
