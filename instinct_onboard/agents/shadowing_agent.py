@@ -92,7 +92,7 @@ class ShadowingAgent(OnboardAgent):
         actor_input_name = self.ort_sessions["actor"].get_inputs()[0].name
         action = self.ort_sessions["actor"].run(None, {actor_input_name: proprio_obs})[0]
         action = action.reshape(-1)
-        done = False
+        done = (self.ros_node.packed_motion_sequence_buffer["time_to_target"] < 0.0).all()  # done if all time_to_target are negative
 
         return action, done
 

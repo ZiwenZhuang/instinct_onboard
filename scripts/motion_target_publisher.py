@@ -29,11 +29,13 @@ class MotionTargetPublisher(Node):
             help="Robot configuration to use.",
         )
         parser.add_argument("--logdir", type=str, help="Directory to load the motion logdir and link_of_interesets.")
+        parser.add_argument("--nonstop_at_exhausted", action="store_true", help="Publish always positive time_to_target even if the motion is exhausted.")
         return parser
 
     def __init__(self, args):
         super().__init__("motion_target_publisher")
 
+        self.args = args
         self.robot_cfg = getattr(robot_cfgs, args.robot_class, None)
         self.sim_joint_names = self.robot_cfg.sim_joint_names
         self.parse_config(args.logdir)
@@ -251,7 +253,10 @@ class MotionTargetPublisher(Node):
 
             # pack into MotionFrame
             motion_frame = MotionSequence.MotionFrame()
-            motion_frame.time_to_target = frame_time[i] - anchor_time
+            motion_frame.time_to_target = min(
+                frame_time[i] - anchor_time,
+                self.motion_update_period_s if self.args.nonstop_at_exhausted else -1,
+            )
             motion_frame.pos_b = pos_b.astype(np.float32)
             motion_frame.quat_w = quaternion.as_float_array(quat_w).astype(np.float32)
             motion_frame.pose_mask = pose_mask
