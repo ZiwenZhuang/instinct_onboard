@@ -5,13 +5,13 @@ import onnxruntime as ort
 import quaternion
 import rclpy
 import yaml
-from rclpy.node import Node
 from geometry_msgs.msg import Point, Quaternion
+from rclpy.node import Node
 from unitree_go.msg import WirelessController
 from unitree_hg.msg import IMUState
 
 from instinct_onboard import robot_cfgs, utils
-from motion_target_msgs.msg import MotionSequence, MotionFrame
+from motion_target_msgs.msg import MotionFrame, MotionSequence
 
 
 class MotionTargetPublisher(Node):
@@ -30,7 +30,11 @@ class MotionTargetPublisher(Node):
             help="Robot configuration to use.",
         )
         parser.add_argument("--logdir", type=str, help="Directory to load the motion logdir and link_of_interesets.")
-        parser.add_argument("--nonstop_at_exhausted", action="store_true", help="Publish always positive time_to_target even if the motion is exhausted.")
+        parser.add_argument(
+            "--nonstop_at_exhausted",
+            action="store_true",
+            help="Publish always positive time_to_target even if the motion is exhausted.",
+        )
         return parser
 
     def __init__(self, args):
@@ -45,7 +49,7 @@ class MotionTargetPublisher(Node):
 
     def parse_config(self, logdir: str):
         """Parse the configuration of the policy model"""
-        with open(os.path.join(logdir, "params", "env.yaml"), "r") as f:
+        with open(os.path.join(logdir, "params", "env.yaml")) as f:
             self.env_cfg = yaml.unsafe_load(f)
         self.motion_reference_config = self.env_cfg["scene"]["motion_reference"]
         # fill configs that will be frequently used in the node
@@ -101,7 +105,7 @@ class MotionTargetPublisher(Node):
         link_quat = []
         for i in range(joint_pos.shape[0]):
             fk_inputs = {
-                self.fk_input_names[0]: joint_pos[i:(i+1)].astype(np.float32),
+                self.fk_input_names[0]: joint_pos[i : (i + 1)].astype(np.float32),
             }
             fk_outputs = self.fk_session.run(None, fk_inputs)
             link_pos.append(fk_outputs[0])  # shape (1, num_links, 3)
@@ -110,8 +114,9 @@ class MotionTargetPublisher(Node):
         self.motion_buffer["link_quat_b"] = np.concatenate(link_quat)  # shape (num_motion_frames, num_links, 4)
         self.get_logger().info("Motion file load done.")
         self.get_logger().info(
-            f"Motion file {self.motion_file} loaded with {joint_pos.shape[0]} frames, "
-            f"total duration {joint_pos.shape[0] / self.motion_buffer['framerate']:.2f} seconds with {self.motion_buffer['framerate']} Hz."
+            f"Motion file {self.motion_file} loaded with {joint_pos.shape[0]} frames, total duration"
+            f" {joint_pos.shape[0] / self.motion_buffer['framerate']:.2f} seconds with"
+            f" {self.motion_buffer['framerate']} Hz."
         )
 
     """
@@ -163,7 +168,7 @@ class MotionTargetPublisher(Node):
                 self.get_logger().info("Motion Target Publisher is ready. Transitioning to 'ready' state.")
         elif self.current_state == "ready":
             self.publish_starting_motion_target()
-            if (self.wireless_controller_state.keys & robot_cfgs.WirelessButtons.up):
+            if self.wireless_controller_state.keys & robot_cfgs.WirelessButtons.up:
                 self.current_state = "motion"
                 self.get_logger().info("Starting motion target publishing. Transitioning to 'motion' state.")
         elif self.current_state == "motion":
@@ -171,7 +176,7 @@ class MotionTargetPublisher(Node):
         elif self.current_state == "done":
             self.get_logger().info("In done state, shutting down the node.")
             raise SystemExit(0)
-    
+
         if hasattr(self, "wireless_controller_state"):
             if (self.wireless_controller_state.keys & robot_cfgs.WirelessButtons.L2) or (
                 self.wireless_controller_state.keys & robot_cfgs.WirelessButtons.R2
@@ -206,7 +211,12 @@ class MotionTargetPublisher(Node):
         """Publish the starting motion target. Also set the motion start time as now."""
         self._motion_start_time = self.get_clock().now()
 
-        frame_idx = np.zeros((self.num_frames,), dtype=int)
+        frame_idx = np.arange(self.num_frames, dtype=int) * self.frame_interval_s * self.motion_buffer["framerate"]
+        frame_idx = np.clip(
+            np.floor(frame_idx).astype(int),
+            0,
+            self.motion_buffer["joint_pos"].shape[0] - 1,
+        )
         root_trans_anchor = self.motion_buffer["root_trans"][0]
         root_quat_anchor = self.motion_buffer["root_quat"][0]
         self.publish_motion_by_frame_idx(
@@ -246,6 +256,8 @@ class MotionTargetPublisher(Node):
         anchor_time: float,  # seconds, time of the anchor frame, w.r.t motion starting time.
     ):
         motion_target_msg = MotionSequence()
+        motion_target_msg.joint_names = self.sim_joint_names
+        motion_target_msg.link_names = self.link_of_interests
         frame_time = frame_idxs / self.motion_buffer["framerate"]
         for i, frame_idx in enumerate(frame_idxs):
             quat_w = self.motion_buffer["root_quat"][frame_idx]
@@ -272,7 +284,7 @@ class MotionTargetPublisher(Node):
             time_to_target = frame_time[i] - anchor_time  # seconds
             if time_to_target < 0:
                 if self.args.nonstop_at_exhausted:
-                    time_to_target = self.motion_update_period_s
+                    time_to_target = self.motion_update_period_s * (i + 1)
                 else:
                     time_to_target = -1.0
             motion_frame.time_to_target = time_to_target
@@ -288,20 +300,24 @@ class MotionTargetPublisher(Node):
             motion_frame.joint_pos_mask = joint_pos_mask
             for link_i in range(len(self.link_of_interests)):
                 # link_name = self.link_of_interests[link_i]
-                motion_frame.link_pos.append(Point(
-                    x=link_pos[link_i][0].item(),
-                    y=link_pos[link_i][1].item(),
-                    z=link_pos[link_i][2].item(),
-                ))
+                motion_frame.link_pos.append(
+                    Point(
+                        x=link_pos[link_i][0].item(),
+                        y=link_pos[link_i][1].item(),
+                        z=link_pos[link_i][2].item(),
+                    )
+                )
             motion_frame.link_pos_mask = link_pos_mask
             for link_i in range(len(self.link_of_interests)):
                 link_name = self.link_of_interests[link_i]
-                motion_frame.link_quat.append(Quaternion(
-                    w=link_quat[link_i][0].item(),
-                    x=link_quat[link_i][1].item(),
-                    y=link_quat[link_i][2].item(),
-                    z=link_quat[link_i][3].item(),
-                ))
+                motion_frame.link_quat.append(
+                    Quaternion(
+                        w=link_quat[link_i][0].item(),
+                        x=link_quat[link_i][1].item(),
+                        y=link_quat[link_i][2].item(),
+                        z=link_quat[link_i][3].item(),
+                    )
+                )
             motion_frame.link_quat_mask = link_quat_mask
             motion_target_msg.data.append(motion_frame)
 
@@ -311,8 +327,11 @@ class MotionTargetPublisher(Node):
         self.motion_target_publisher.publish(motion_target_msg)
 
         # warn if no motion frames are valid
-        if not any(frame.time_to_target >= 0 for frame in motion_target_msg.data):
-            self.get_logger().warn("No valid motion frames to publish.", throttle_duration_sec=5.0)
+        if all(frame_time[i] - anchor_time < 0 for i in range(len(frame_time))):
+            if self.args.nonstop_at_exhausted:
+                self.get_logger().info("All motion frames are exhausted, but nonstop_at_exhausted is enabled. ")
+            else:
+                self.get_logger().info("All motion frames are exhausted, all published motion will be invalid.")
 
 
 def main(args):
@@ -331,6 +350,7 @@ def main(args):
 
 if __name__ == "__main__":
     import argparse
+
     parser = argparse.ArgumentParser(description="Motion Target Publisher for Unitree robots.")
     parser = MotionTargetPublisher.add_arguments(parser)
 
