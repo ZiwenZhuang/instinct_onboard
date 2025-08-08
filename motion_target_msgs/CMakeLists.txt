@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(motion_reference_msgs)
+project(motion_target_msgs)
 
 # Default to C99
 if(NOT CMAKE_C_STANDARD)
