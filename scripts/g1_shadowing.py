@@ -1,15 +1,15 @@
 import os
 import sys
-import yaml
 
 import numpy as np
-
 import rclpy
+import yaml
 
 from instinct_onboard.agents.base import OnboardAgent
-from instinct_onboard.agents.shadowing_agent import ShadowingAgent, MotionAsActAgent
+from instinct_onboard.agents.shadowing_agent import MotionAsActAgent, ShadowingAgent
 from instinct_onboard.robot_cfgs import WirelessButtons
 from instinct_onboard.ros_nodes.shadowing import ShadowingNode
+
 
 class G1ShadowingNode(ShadowingNode):
     def __init__(self, *args, **kwargs):
@@ -52,6 +52,7 @@ class G1ShadowingNode(ShadowingNode):
                 self.get_logger().info("ShadowingAgent done.")
             self.send_action(action)
 
+
 def main(args):
     rclpy.init()
 
@@ -86,6 +87,7 @@ def main(args):
         node.destroy_node()
         rclpy.shutdown()
         print("Node shutdown complete.")
+
 
 if __name__ == "__main__":
     import argparse

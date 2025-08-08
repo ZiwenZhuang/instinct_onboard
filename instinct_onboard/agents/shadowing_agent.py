@@ -92,7 +92,9 @@ class ShadowingAgent(OnboardAgent):
         actor_input_name = self.ort_sessions["actor"].get_inputs()[0].name
         action = self.ort_sessions["actor"].run(None, {actor_input_name: proprio_obs})[0]
         action = action.reshape(-1)
-        done = (self.ros_node.packed_motion_sequence_buffer["time_to_target"] < 0.0).all()  # done if all time_to_target are negative
+        done = (
+            self.ros_node.packed_motion_sequence_buffer["time_to_target"] < 0.0
+        ).all()  # done if all time_to_target are negative
 
         return action, done
 
@@ -171,10 +173,12 @@ class ShadowingAgent(OnboardAgent):
     def _get_link_rot_mask_obs(self):
         return self.ros_node.packed_motion_sequence_buffer["link_rot_mask"]  # (num_frames, num_links)
 
+
 class MotionAsActAgent(OnboardAgent):
     """An agent that only output joint_pos of motion reference as action.
     If the current joint_pos is far from the motion reference, it will output a scaled version of the difference.
     """
+
     def __init__(
         self,
         logdir: str,
