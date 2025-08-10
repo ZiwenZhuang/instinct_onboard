@@ -32,6 +32,32 @@ def quat_to_tan_norm(quat: np.quaternion) -> np.array:
     return tan_norm
 
 
+TANNORM_PROTOTYPE = np.array(
+    [
+        [1.0, 0.0, 0.0],  # tangent vector
+        [0.0, 0.0, 1.0],  # normal vector
+    ]
+)  # shape (2, 3)
+
+
+def quat_to_tan_norm_batch(quats: np.ndarray) -> np.ndarray:
+    """Convert a batch of quaternions to tangent-normal representation.
+
+    Args:
+        quats: A batch of quaternions in (N, 4) shape, where N is the batch size.
+
+    Returns:
+        A batch of tangent-normal vectors in (N, 6) shape.
+    """
+
+    if not quats.dtype == quaternion.quaternion:
+        quats = quaternion.from_float_array(quats)
+
+    tannorm = quaternion.rotate_vectors(quats, TANNORM_PROTOTYPE)  # (N, 2, 3)
+    tannorm = tannorm.reshape(len(quats), 6)
+    return tannorm
+
+
 def normalize_quat(quat: np.quaternion) -> np.quaternion:
     """Normalize the quaternion.
 
@@ -74,17 +100,28 @@ def yaw_quat(quat: np.quaternion) -> np.quaternion:
 class CircularBuffer:
     """A circular buffer with fixed length and filled with a default value."""
 
-    def __init__(self, length: int, shape: Sequence[int], default_value: float = 0.0):
-        self.default_value = default_value
-        self.buffer = np.zeros((length, *shape), dtype=np.float32) + default_value
-        self.length = length
+    def __init__(self, length: int):
+        self._buffer: np.ndarray | None = None
+        self._length = length
+        self._num_pushes = 0  # in case of reset or the buffer is not full, this will be less than length
 
-    def update(self, value: float):
-        self.buffer = np.roll(self.buffer, -1, axis=0)
-        self.buffer[-1] = value
+    def append(self, value: float):
+        """Append a value to the buffer, if the buffer is full, the oldest value will be removed."""
+        if self._buffer is None:
+            self._buffer = np.zeros((self._length,) + tuple(value.shape), dtype=np.float32)
+        if self._num_pushes == 0:
+            self._buffer[:] = value
+        else:
+            self._buffer = np.roll(self._buffer, -1, axis=0)
+            self._buffer[-1] = value
+        self._num_pushes += 1
 
-    def get(self):
-        return self.buffer
+    @property
+    def buffer(self):
+        return self._buffer
 
-    def clear(self):
-        self.buffer[:] = self.default_value
+    def reset(self):
+        if self._buffer is None:
+            return
+        self._buffer[:] = 0.0
+        self._num_pushes = 0

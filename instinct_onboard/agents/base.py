@@ -41,6 +41,7 @@ class OnboardAgent(ABC):
                 or obs_name == "enable_corruption"
                 or obs_name == "history_length"
                 or obs_name == "flatten_history_dim"
+                or obs_config is None
             ):
                 continue
             obs_func: str = obs_config["func"].split(":")[-1]  # get the function name from the config
@@ -73,7 +74,7 @@ class OnboardAgent(ABC):
             self.obs_funcs[obs_name] = getattr(self, f"_get_{command_name}_obs")
         else:
             raise ValueError(
-                f"Generated command observation function '{command_name}' not found in the agent. "
+                f"Generated command observation function '_get_{command_name}_obs' not found in the agent. "
                 "Please check the configuration."
             )
 
@@ -86,7 +87,8 @@ class OnboardAgent(ABC):
             self.obs_funcs[obs_name] = getattr(self.ros_node, f"_get_{obs_func}_obs")
         else:
             raise ValueError(
-                f"Observation function '{obs_func}' not found in the agent or ros_node. Please check the configuration."
+                f"Observation function '_get_{obs_func}_obs' not found in the agent or ros_node. Please check the"
+                " configuration."
             )
 
     def _get_single_obs_term(

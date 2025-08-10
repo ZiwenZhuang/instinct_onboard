@@ -255,7 +255,7 @@ class Ros2Real(Node):
         else:
             return np.array(self.low_state_buffer.imu_state.quaternion, dtype=np.float32)
 
-    def _get_ang_vel_obs(self):
+    def _get_base_ang_vel_obs(self):
         if hasattr(self, "torso_imu_buffer"):
             return np.array(self.torso_imu_buffer.gyroscope, dtype=np.float32)
         else:
@@ -290,7 +290,7 @@ class Ros2Real(Node):
     def _get_joint_vel_obs(self):
         return self.joint_vel_
 
-    def _get_last_actions_obs(self):
+    def _get_last_action_obs(self):
         return self.actions
 
     """
