@@ -10,6 +10,7 @@ from geometry_msgs.msg import PoseArray
 
 from instinct_onboard.agents.base import OnboardAgent
 from instinct_onboard.ros_nodes.ros_real import Ros2Real
+from instinct_onboard.utils import quat_to_tan_norm_batch
 from motion_target_msgs.msg import MotionSequence
 
 
@@ -28,11 +29,22 @@ class ShadowingAgent(OnboardAgent):
         super()._parse_obs_config()
         with open(os.path.join(self.logdir, "params", "agent.yaml")) as f:
             self.agent_cfg = yaml.unsafe_load(f)
-        self.motion_ref_obs_names = self.agent_cfg["policy"]["encoder_cfgs"]["motion_ref"]["component_names"]
+        self.motion_ref_obs_names = self.agent_cfg["policy"]["encoder_configs"]["motion_ref"]["component_names"]
         self.ros_node.get_logger().info(f"ShadowingAgent observation names: {self.motion_ref_obs_names}")
         all_obs_names = list(self.obs_funcs.keys())
         self.proprio_obs_names = [obs_name for obs_name in all_obs_names if obs_name not in self.motion_ref_obs_names]
         self.ros_node.get_logger().info(f"ShadowingAgent proprioception observation names: {self.proprio_obs_names}")
+
+    def _parse_observation_function(self, obs_name, obs_config):
+        obs_func = obs_config["func"].split(":")[-1]  # get the function name from the config
+        if obs_func == "command_mask":
+            command_name = obs_config["params"]["command_name"]
+            if hasattr(self, f"_get_{command_name}_mask_obs"):
+                self.obs_funcs[obs_name] = getattr(self, f"_get_{command_name}_mask_obs")
+                return
+            else:
+                raise ValueError(f"Unknown observation function for observation {obs_name}")
+        return super()._parse_observation_function(obs_name, obs_config)
 
     def _load_models(self):
         """Load the ONNX model for the agent."""
@@ -56,6 +68,7 @@ class ShadowingAgent(OnboardAgent):
         link_pos, link_quat = output[0], output[1]  # link_pos: (num_links, 3), link_quat: (num_links, 4)
         self.link_pos_ = link_pos
         self.link_quat_ = link_quat
+        self.link_tannorm_ = quat_to_tan_norm_batch(link_quat)
 
     def reset(self):
         """Reset the agent state and the rosbag reader."""
@@ -102,11 +115,29 @@ class ShadowingAgent(OnboardAgent):
     Agent specific observation functions for Shadowing Agent.
     """
 
-    def _get_time_to_target_obs(self) -> np.ndarray:
-        """Return shape: (1, num_frames)"""
+    def _get_link_pos_b_obs(self):
+        """Return shape: (num_links, 3)"""
+        return self.link_pos_
+
+    def _get_link_tannorm_b_obs(self):
+        """Return shape: (num_links, 6) in tangent-normal form"""
+        return self.link_tannorm_
+
+    def _get_root_tannorm_w_obs(self):
+        """Return the root link's tangent-normal form in world frame.
+        Return shape: (6,)
+        """
+        quat_w = self.ros_node._get_quat_w_obs().reshape(1, 4)  # (1, 4)
+        root_tannorm_w = quat_to_tan_norm_batch(quat_w).reshape(
+            6,
+        )  # (6,)
+        return root_tannorm_w
+
+    def _get_time_to_target_command_obs(self) -> np.ndarray:
+        """Return shape: (num_frames, 1)"""
         return self.ros_node.packed_motion_sequence_buffer["time_to_target"].reshape(-1, 1)  # (num_frames, 1)
 
-    def _get_time_from_ref_update_obs(self):
+    def _get_time_from_reference_update_obs(self):
         return np.array(
             [
                 (self.ros_node.get_clock().now().nanoseconds - self.ros_node.motion_sequence_receive_time.nanoseconds)
@@ -116,61 +147,69 @@ class ShadowingAgent(OnboardAgent):
             dtype=np.float32,
         )  # (num_frames,)
 
-    def _get_pose_ref_mask_obs(self):
-        return self.ros_node.packed_motion_sequence_buffer["pose_mask"]  # (num_frames, 4)
+    def _get_position_ref_command_obs(self):
+        """Command, return shape: (num_frames, 3)"""
+        return self.ros_node.packed_motion_sequence_buffer["root_pos_b"]
 
-    def _get_joint_pos_ref_obs(self):
+    def _get_rotation_ref_command_obs(self):
+        """Command, return shape: (num_frames, 6)"""
+        root_quat_w_ref = self.ros_node.packed_motion_sequence_buffer["root_quat_w"]  # (num_frames, 4)
+        root_quat_w = self.ros_node._get_quat_w_obs()[None, :]  # (1, 4)
+        root_quat_err = quaternion.quaternion_conjugate(root_quat_w) * root_quat_w_ref  # (num_frames, 4)
+        root_tannorm_err = quat_to_tan_norm_batch(root_quat_err)  # (num_frames, 6)
+        return root_tannorm_err  # (num_frames, 6), in tangent-normal form
+
+    def _get_position_ref_command_mask_obs(self):
+        """Command, return shape: (num_frames, 2)"""
+        return self.ros_node.packed_motion_sequence_buffer["pose_mask"][:, :2]
+
+    def _get_rotation_ref_command_mask_obs(self):
+        """Command, return shape: (num_frames, 2)"""
+        return self.ros_node.packed_motion_sequence_buffer["pose_mask"][:, 2:]
+
+    # def _get_pose_ref_mask_obs(self):
+    #     return self.ros_node.packed_motion_sequence_buffer["pose_mask"]  # (num_frames, 4)
+
+    def _get_joint_pos_ref_command_obs(self):
         """Command, return shape: (num_frames, num_joints)"""
         return (
             self.ros_node.packed_motion_sequence_buffer["joint_pos"] - self.ros_node.default_joint_pos[None, :]
         )  # (num_frames, num_joints)
 
-    def _get_joint_pos_err_ref_obs(self):
+    def _get_joint_pos_err_ref_command_obs(self):
         """Command, return shape: (num_frames, num_joints)"""
         return (
             self.ros_node.packed_motion_sequence_buffer["joint_pos"] - self.ros_node.joint_pos_[None, :]
         )  # (num_frames, num_joints)
 
-    def _get_joint_pos_mask_obs(self):
+    def _get_joint_pos_ref_command_mask_obs(self):
         """Command, return shape: (num_frames, num_joints)"""
         return self.ros_node.packed_motion_sequence_buffer["joint_pos_mask"]  # (num_frames, num_joints)
 
-    def _get_link_pos_ref_obs(self):
+    def _get_link_pos_ref_command_obs(self):
         return self.ros_node.packed_motion_sequence_buffer["link_pos"]  # (num_frames, num_links, 3), in robot base link
 
-    def _get_link_pos_err_ref_obs(self):
+    def _get_link_pos_err_ref_command_obs(self):
         return (
             self.ros_node.packed_motion_sequence_buffer["link_pos"] - self.link_pos_[None, :, :]
         )  # (num_frames, num_links, 3)
 
-    def _get_link_pos_ref_mask_obs(self):
+    def _get_link_pos_ref_command_mask_obs(self):
         return self.ros_node.packed_motion_sequence_buffer["link_pos_mask"]  # (num_frames, num_links)
 
-    def _get_link_rot_ref_obs(self):
+    def _get_link_rot_ref_command_obs(self):
         return self.ros_node.packed_motion_sequence_buffer[
             "link_tannorm"
         ]  # (num_frames, num_links, 6), in robot base link
 
-    def _get_link_rot_err_ref_obs(self):
-        link_quat_ref = self.ros_node.packed_motion_sequence_buffer["link_quat"]
+    def _get_link_rot_err_ref_command_obs(self):
+        link_quat_ref = self.ros_node.packed_motion_sequence_buffer["link_quat"]  # (num_frames, num_links, 4)
         link_quat_ = self.link_quat_[None, :, :]  # (1, num_links, 4)
-        link_rot_err = quaternion.quaternion_multiply(quaternion.quaternion_conjugate(link_quat_), link_quat_ref)
-        link_tannorm_err = np.concatenate(
-            [
-                quaternion.rotate_vectors(
-                    link_rot_err,
-                    self.ros_node.tannorm_prototype[0][None, :].repeat(link_quat_ref.shape[1], axis=0)[None, :, :],
-                ),  # (num_frames, num_links, 3)
-                quaternion.rotate_vectors(
-                    link_rot_err,
-                    self.ros_node.tannorm_prototype[1][None, :].repeat(link_quat_ref.shape[1], axis=0)[None, :, :],
-                ),  # (num_frames, num_links, 3)
-            ],
-            axis=-1,
-        ).astype(np.float32)
+        link_rot_err = quaternion.quaternion_conjugate(link_quat_) * link_quat_ref
+        link_tannorm_err = quat_to_tan_norm_batch(link_rot_err)
         return link_tannorm_err  # (num_frames, num_links, 6)
 
-    def _get_link_rot_mask_obs(self):
+    def _get_link_rot_ref_command_mask_obs(self):
         return self.ros_node.packed_motion_sequence_buffer["link_rot_mask"]  # (num_frames, num_links)
 
 

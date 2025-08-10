@@ -3,6 +3,7 @@ import quaternion
 import rclpy
 from rclpy.node import Node
 
+from instinct_onboard.utils import quat_to_tan_norm_batch
 from motion_target_msgs.msg import MotionSequence
 
 from .ros_real import Ros2Real
@@ -14,7 +15,6 @@ class ShadowingNodeMixin:
         super().__init__(*args, **kwargs)
         self.motion_sequence_topic = motion_sequence_topic
         self.motion_sequence_buffer = None
-        self.tannorm_prototype = np.array([[1, 0, 0], [0, 0, 1]], dtype=np.float32)  # x,y,z,x,y,z, unit length, (2, 3)
 
     def start_ros_handlers(self):
         """Start the ROS handlers for shadowing and call the super class method."""
@@ -38,21 +38,22 @@ class ShadowingNodeMixin:
         num_links = len(msg.data[0].link_pos)
         time_to_target = np.zeros(num_frames, dtype=np.float32)
         root_pos_b = np.zeros((num_frames, 3), dtype=np.float32)
-        root_quat_b = np.zeros((num_frames, 4), dtype=np.float32)
+        root_quat_w = np.zeros((num_frames, 4), dtype=np.float32)
         pose_mask = np.ones((num_frames, 4), dtype=np.float32)  # (num_frames, 4), for root_pos_b and root_quat_b
         joint_pos = np.zeros((num_frames, num_joints), dtype=np.float32)
         joint_pos_mask = np.ones((num_frames, num_joints), dtype=np.float32)  # (num_frames, num_joints)
         link_pos = np.zeros((num_frames, num_links, 3), dtype=np.float32)
         link_pos_mask = np.ones((num_frames, num_links), dtype=np.float32)  # (num_frames, num_links)
         link_quat = np.zeros((num_frames, num_links, 4), dtype=np.float32)
+        link_tannorm = np.zeros((num_frames, num_links, 6), dtype=np.float32)
         link_quat_mask = np.ones((num_frames, num_links), dtype=np.float32)  # (num_frames, num_links, 4)
         for i, frame in enumerate(msg.data):
             time_to_target[i] = frame.time_to_target
             root_pos_b[i] = frame.root_pos_b
-            root_quat_b[i, 0] = frame.root_quat_b.x
-            root_quat_b[i, 1] = frame.root_quat_b.y
-            root_quat_b[i, 2] = frame.root_quat_b.z
-            root_quat_b[i, 3] = frame.root_quat_b.w
+            root_quat_w[i, 0] = frame.quat_w.x
+            root_quat_w[i, 1] = frame.quat_w.y
+            root_quat_w[i, 2] = frame.quat_w.z
+            root_quat_w[i, 3] = frame.quat_w.w
             for j in range(num_joints):
                 joint_pos[i, j] = frame.joint_pos[j]  # in urdf space, simulation order.
                 joint_pos_mask[i, j] = frame.joint_pos_mask[j]  # (num_frames, num_joints)
@@ -64,26 +65,14 @@ class ShadowingNodeMixin:
                 link_quat[i, j, 3] = frame.link_quat[j].z
                 link_pos_mask[i, j] = frame.link_pos_mask[j]
                 link_quat_mask[i, j] = frame.link_quat_mask[j]
-            pose_mask[i] = frame.pose_mask  # (4,) for root_pos_b and root_quat_b
-        link_tannorm = np.concatenate(
-            [
-                quaternion.rotate_vectors(
-                    link_quat, self.tannorm_prototype[0][None, :].repeat(num_links, axis=0)[None, :, :]
-                ),  # (num_frames, num_links, 3)
-                quaternion.rotate_vectors(
-                    link_quat, self.tannorm_prototype[1][None, :].repeat(num_links, axis=0)[None, :, :]
-                ),  # (num_frames, num_links, 3)
-            ],
-            axis=-1,
-        ).astype(
-            np.float32
-        )  # (num_frames, num_links, 6)
+            pose_mask[i] = frame.pose_mask  # (4,) for root_pos_b and root_quat_w
+            link_tannorm[i] = quat_to_tan_norm_batch(link_quat[i])
 
         self.packed_motion_sequence_buffer = {
             "time_to_target_when_received": time_to_target,
             "time_to_target": time_to_target,
             "root_pos_b": root_pos_b,
-            "root_quat_b": root_quat_b,
+            "root_quat_w": root_quat_w,
             "pose_mask": pose_mask,
             "joint_pos": joint_pos,
             "joint_pos_mask": joint_pos_mask,
