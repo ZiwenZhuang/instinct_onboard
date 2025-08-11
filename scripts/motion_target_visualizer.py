@@ -1,4 +1,7 @@
 import os
+import signal
+import subprocess
+import time
 
 import numpy as np
 import onnxruntime as ort
@@ -11,6 +14,26 @@ from sensor_msgs.msg import JointState
 from tf2_ros import TransformBroadcaster
 
 from motion_target_msgs.msg import MotionFrame, MotionSequence
+
+
+def launch_process(command):
+    # Start the process
+    process = subprocess.Popen(command)
+
+    def handle_signal(signum, frame):
+        # Forward the signal to the child process
+        process.send_signal(signum)
+        # Wait a moment for the process to handle it
+        time.sleep(0.1)
+        # Exit the parent if the child has exited
+        if process.poll() is not None:
+            exit(0)
+
+    # Set up signal handlers
+    signal.signal(signal.SIGINT, handle_signal)
+    signal.signal(signal.SIGTERM, handle_signal)
+
+    return process
 
 
 class MotionTargetVisualizer(Node):
@@ -81,6 +104,16 @@ def main(args):
 
     node.start_ros_handlers()
 
+    if args.rviz:
+        launch_process(
+            [
+                "ros2",
+                "launch",
+                "g1_description",
+                "rviz.py",
+            ]
+        )
+
     rclpy.spin(node)
 
     node.destroy_node()
@@ -91,6 +124,12 @@ if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser(description="Motion Target Visualizer Node")
+    parser.add_argument(
+        "--rviz",
+        action="store_true",
+        default=False,
+        help="Launch RViz automatically by this process.",
+    )
 
     args = parser.parse_args()
 
