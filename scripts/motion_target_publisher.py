@@ -329,9 +329,13 @@ class MotionTargetPublisher(Node):
         # warn if no motion frames are valid
         if all(frame_time[i] - anchor_time < 0 for i in range(len(frame_time))):
             if self.args.nonstop_at_exhausted:
-                self.get_logger().info("All motion frames are exhausted, but nonstop_at_exhausted is enabled. ")
+                self.get_logger().info(
+                    "All motion frames are exhausted, but nonstop_at_exhausted is enabled.", throttle_duration_sec=10
+                )
             else:
-                self.get_logger().info("All motion frames are exhausted, all published motion will be invalid.")
+                self.get_logger().info(
+                    "All motion frames are exhausted, all published motion will be invalid.", throttle_duration_sec=10
+                )
 
 
 def main(args):

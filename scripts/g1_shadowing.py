@@ -31,16 +31,19 @@ class G1ShadowingNode(ShadowingNode):
         if self.current_agent_name is None:
             # waiting for motion sequence to arrive
             if self.motion_sequence_buffer is not None:
-                self.get_logger().info("Motion sequence received, switching to motion_ac_act agent.")
-                self.current_agent_name = "motion_ac_act"
+                self.get_logger().info("Motion sequence received, switching to motion_as_act agent.")
+                self.current_agent_name = "motion_as_act"
                 self.available_agents[self.current_agent_name].reset()
             else:
                 self.get_logger().info("Waiting for motion sequence...", throttle_duration_sec=5.0)
                 return
-        elif self.current_agent_name == "motion_ac_act":
+        elif self.current_agent_name == "motion_as_act":
             action, done = self.available_agents[self.current_agent_name].step()
             if done:
-                self.get_logger().info("MotionAsActAgent done, press 'up' button to switch to shadowing agent.")
+                self.get_logger().info(
+                    "MotionAsActAgent done, press 'up' button to switch to shadowing agent.",
+                    throttle_duration_sec=30.0,
+                )
             if done and (self.joy_stick_buffer.keys & WirelessButtons.up):
                 self.get_logger().info("Up button pressed, switching to shadowing agent.")
                 self.current_agent_name = "shadowing"
@@ -110,7 +113,24 @@ if __name__ == "__main__":
         default=False,
         help="Run the node without dry run mode (default: False)",
     )
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        default=False,
+        help="Enable debug mode (default: False)",
+    )
 
     args = parser.parse_args()
+
+    if args.debug:
+        # import typing; typing.TYPE_CHECKING = True
+        import debugpy
+
+        ip_address = ("0.0.0.0", 6789)
+        print("Process: " + " ".join(sys.argv[:]))
+        print("Is waiting for attach at address: %s:%d" % ip_address, flush=True)
+        debugpy.listen(ip_address)
+        debugpy.wait_for_client()
+        debugpy.breakpoint()
 
     main(args)
