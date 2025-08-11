@@ -30,10 +30,10 @@ class ShadowingAgent(OnboardAgent):
         with open(os.path.join(self.logdir, "params", "agent.yaml")) as f:
             self.agent_cfg = yaml.unsafe_load(f)
         self.motion_ref_obs_names = self.agent_cfg["policy"]["encoder_configs"]["motion_ref"]["component_names"]
-        self.ros_node.get_logger().info(f"ShadowingAgent observation names: {self.motion_ref_obs_names}")
+        self.ros_node.get_logger().info(f"ShadowingAgent motion reference names: {self.motion_ref_obs_names}")
         all_obs_names = list(self.obs_funcs.keys())
         self.proprio_obs_names = [obs_name for obs_name in all_obs_names if obs_name not in self.motion_ref_obs_names]
-        self.ros_node.get_logger().info(f"ShadowingAgent proprioception observation names: {self.proprio_obs_names}")
+        self.ros_node.get_logger().info(f"ShadowingAgent proprioception names: {self.proprio_obs_names}")
 
     def _parse_observation_function(self, obs_name, obs_config):
         obs_func = obs_config["func"].split(":")[-1]  # get the function name from the config

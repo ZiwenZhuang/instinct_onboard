@@ -313,7 +313,6 @@ class Ros2Real(Node):
     def send_action(self, actions):
         """Send the action to the robot motors, which does the preprocessing
         just like env.step in simulation.
-        Thus, the actions has the batch dimension, whose size is 1.
         """
         # NOTE: Only calling this function currently will update self.action for self._get_last_actions_obs
         self.actions[:] = actions

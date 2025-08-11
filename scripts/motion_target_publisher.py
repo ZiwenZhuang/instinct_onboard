@@ -211,7 +211,7 @@ class MotionTargetPublisher(Node):
         """Publish the starting motion target. Also set the motion start time as now."""
         self._motion_start_time = self.get_clock().now()
 
-        frame_idx = np.arange(self.num_frames, dtype=int) * self.frame_interval_s * self.motion_buffer["framerate"]
+        frame_idx = np.ones(self.num_frames, dtype=int) * self.frame_interval_s * self.motion_buffer["framerate"]
         frame_idx = np.clip(
             np.floor(frame_idx).astype(int),
             0,
