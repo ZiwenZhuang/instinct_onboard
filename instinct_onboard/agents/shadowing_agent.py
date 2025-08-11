@@ -64,8 +64,8 @@ class ShadowingAgent(OnboardAgent):
         joint_pos = self.ros_node.joint_pos_
         # run forward kinematics to get the link positions
         fk_input_name = self.ort_sessions["fk"].get_inputs()[0].name
-        output = self.ort_sessions["fk"].run(None, {fk_input_name: joint_pos})
-        link_pos, link_quat = output[0], output[1]  # link_pos: (num_links, 3), link_quat: (num_links, 4)
+        output = self.ort_sessions["fk"].run(None, {fk_input_name: joint_pos[None, :]})
+        link_pos, link_quat = output[0][0], output[1][0]  # link_pos: (num_links, 3), link_quat: (num_links, 4)
         self.link_pos_ = link_pos
         self.link_quat_ = link_quat
         self.link_tannorm_ = quat_to_tan_norm_batch(link_quat)
@@ -84,9 +84,11 @@ class ShadowingAgent(OnboardAgent):
         for motion_ref_obs_name in self.motion_ref_obs_names:
             obs_term_value = self._get_single_obs_term(motion_ref_obs_name)
             time_dim = obs_term_value.shape[0]  # (time, batch_size, ...)
-            motion_ref_obs.append(obs_term_value.reshape(1, time_dim, -1))  # reshape to (batch_size, time, -1)
+            motion_ref_obs.append(
+                obs_term_value.reshape(1, time_dim, -1).astype(np.float32)
+            )  # reshape to (batch_size, time, -1)
         motion_ref_obs = np.concatenate(
-            motion_ref_obs, axis=1
+            motion_ref_obs, axis=-1
         )  # across time dimension. shape (batch_size, time, num_obs_terms)
 
         # run motion reference encoder
@@ -97,9 +99,9 @@ class ShadowingAgent(OnboardAgent):
         proprio_obs = []
         for proprio_obs_name in self.proprio_obs_names:
             obs_term_value = self._get_single_obs_term(proprio_obs_name)
-            proprio_obs.append(obs_term_value.reshape(1, -1))
-        proprio_obs.append(motion_ref_output.reshape(1, -1))  # append motion reference output
-        proprio_obs = np.concatenate(proprio_obs, axis=1)
+            proprio_obs.append(obs_term_value.reshape(1, -1).astype(np.float32))
+        proprio_obs.append(motion_ref_output.reshape(1, -1).astype(np.float32))  # append motion reference output
+        proprio_obs = np.concatenate(proprio_obs, axis=-1)
 
         # run actor MLP
         actor_input_name = self.ort_sessions["actor"].get_inputs()[0].name
@@ -138,6 +140,7 @@ class ShadowingAgent(OnboardAgent):
         return self.ros_node.packed_motion_sequence_buffer["time_to_target"].reshape(-1, 1)  # (num_frames, 1)
 
     def _get_time_from_reference_update_obs(self):
+        """Return shape: (num_frames, 1)"""
         return np.array(
             [
                 (self.ros_node.get_clock().now().nanoseconds - self.ros_node.motion_sequence_receive_time.nanoseconds)
@@ -145,7 +148,9 @@ class ShadowingAgent(OnboardAgent):
             ]
             * self.ros_node.packed_motion_sequence_buffer["time_to_target"].shape[0],
             dtype=np.float32,
-        )  # (num_frames,)
+        )[
+            :, None
+        ]  # (num_frames, 1)
 
     def _get_position_ref_command_obs(self):
         """Command, return shape: (num_frames, 3)"""
@@ -153,9 +158,11 @@ class ShadowingAgent(OnboardAgent):
 
     def _get_rotation_ref_command_obs(self):
         """Command, return shape: (num_frames, 6)"""
-        root_quat_w_ref = self.ros_node.packed_motion_sequence_buffer["root_quat_w"]  # (num_frames, 4)
+        root_quat_w_ref_ = self.ros_node.packed_motion_sequence_buffer["root_quat_w"]  # (num_frames, 4)
         root_quat_w = self.ros_node._get_quat_w_obs()[None, :]  # (1, 4)
-        root_quat_err = quaternion.quaternion_conjugate(root_quat_w) * root_quat_w_ref  # (num_frames, 4)
+        root_quat_w_ref = quaternion.from_float_array(root_quat_w_ref_)  # (num_frames, 4)
+        root_quat_w = quaternion.from_float_array(root_quat_w)  # (1, 4)
+        root_quat_err = root_quat_w.conjugate() * root_quat_w_ref  # (num_frames, 4)
         root_tannorm_err = quat_to_tan_norm_batch(root_quat_err)  # (num_frames, 6)
         return root_tannorm_err  # (num_frames, 6), in tangent-normal form
 
@@ -203,14 +210,18 @@ class ShadowingAgent(OnboardAgent):
         ]  # (num_frames, num_links, 6), in robot base link
 
     def _get_link_rot_err_ref_command_obs(self):
-        link_quat_ref = self.ros_node.packed_motion_sequence_buffer["link_quat"]  # (num_frames, num_links, 4)
+        link_quat_ref_ = self.ros_node.packed_motion_sequence_buffer["link_quat"]  # (num_frames, num_links, 4)
         link_quat_ = self.link_quat_[None, :, :]  # (1, num_links, 4)
-        link_rot_err = quaternion.quaternion_conjugate(link_quat_) * link_quat_ref
-        link_tannorm_err = quat_to_tan_norm_batch(link_rot_err)
+        link_quat_ref = quaternion.from_float_array(link_quat_ref_)  # (num_frames, num_links, quaternion(4))
+        link_quat = quaternion.from_float_array(link_quat_)  # (1, num_links, quaternion(4))
+        link_rot_err = link_quat.conjugate() * link_quat_ref  # (num_frames, num_links, quaternion(4))
+        link_rot_err_ = link_rot_err.reshape(-1)  # (num_frames * num_links, quaternion(4))
+        link_tannorm_err_ = quat_to_tan_norm_batch(link_rot_err_)
+        link_tannorm_err = link_tannorm_err_.reshape(*link_rot_err.shape[:2], 6)
         return link_tannorm_err  # (num_frames, num_links, 6)
 
     def _get_link_rot_ref_command_mask_obs(self):
-        return self.ros_node.packed_motion_sequence_buffer["link_rot_mask"]  # (num_frames, num_links)
+        return self.ros_node.packed_motion_sequence_buffer["link_quat_mask"]  # (num_frames, num_links)
 
 
 class MotionAsActAgent(OnboardAgent):
@@ -243,6 +254,7 @@ class MotionAsActAgent(OnboardAgent):
         command_joint_pos[over_threshold_mask] = (
             current_joint_pos[over_threshold_mask] + np.sign(joint_diff[over_threshold_mask]) * self.joint_diff_scale
         )
+        print(f"Joint Error max: {np.abs(joint_diff).max():.3f}", end="\r")
         action = (command_joint_pos - self.ros_node.default_joint_pos) / self.ros_node.action_scale
         action = action.astype(np.float32)
         done = not np.any(over_threshold_mask)  # done if all joint positions are within the threshold
