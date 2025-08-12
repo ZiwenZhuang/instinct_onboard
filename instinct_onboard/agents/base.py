@@ -131,7 +131,8 @@ class OnboardAgent(ABC):
     @abstractmethod
     def reset(self):
         """Reset the agent. This is a placeholder for any reset logic if needed."""
-        pass
+        for obs_history_buffer in self.obs_history_buffers.values():
+            obs_history_buffer.reset()
 
 
 class ColdStartAgent(OnboardAgent):
