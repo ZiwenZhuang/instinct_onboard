@@ -12,6 +12,7 @@ from geometry_msgs.msg import Point, Quaternion, TransformStamped
 from rclpy.node import Node
 from sensor_msgs.msg import JointState
 from tf2_ros import TransformBroadcaster
+from unitree_hg.msg import IMUState
 
 from motion_target_msgs.msg import MotionFrame, MotionSequence
 
@@ -46,6 +47,7 @@ class MotionTargetVisualizer(Node):
         self.motion_target_subscriber = self.create_subscription(
             MotionSequence, "motion_target", self.motion_target_callback, 10
         )
+        self.robot_imu_subscriber = self.create_subscription(IMUState, "/secondary_imu", self.robot_imu_callback, 10)
         self.main_loop_timer = self.create_timer(0.02, self.main_loop_callback)
         self.get_logger().info("MotionTargetVisualizer started.")
 
@@ -53,6 +55,24 @@ class MotionTargetVisualizer(Node):
         self.motion_target = msg
         self.motion_receive_time = self.get_clock().now()
         self.get_logger().info(f"Received new motion sequence with {len(msg.data)} frames.", once=True)
+
+    def robot_imu_callback(self, msg: IMUState):
+        """Callback for the IMU state and publish to tf"""
+
+        tf_msg = TransformStamped()
+        tf_msg.header.stamp = self.get_clock().now().to_msg()
+        tf_msg.header.frame_id = "world"
+        tf_msg.child_frame_id = "robot_imu"
+        tf_msg.transform.translation.x = 0.0
+        tf_msg.transform.translation.y = 1.5
+        tf_msg.transform.translation.z = 0.0
+        tf_msg.transform.rotation = Quaternion(
+            w=float(msg.quaternion[0]),
+            x=float(msg.quaternion[1]),
+            y=float(msg.quaternion[2]),
+            z=float(msg.quaternion[3]),
+        )
+        self.tf_broadcaster.sendTransform(tf_msg)
 
     def main_loop_callback(self):
         if not hasattr(self, "motion_target"):
