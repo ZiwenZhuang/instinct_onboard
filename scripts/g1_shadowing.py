@@ -41,11 +41,11 @@ class G1ShadowingNode(ShadowingNode):
             action, done = self.available_agents[self.current_agent_name].step()
             if done:
                 self.get_logger().info(
-                    "MotionAsActAgent done, press 'up' button to switch to shadowing agent.",
-                    throttle_duration_sec=30.0,
+                    "MotionAsActAgent done, press 'L1' button to switch to shadowing agent.",
+                    throttle_duration_sec=10.0,
                 )
-            if done and (self.joy_stick_buffer.keys & WirelessButtons.up):
-                self.get_logger().info("Up button pressed, switching to shadowing agent.")
+            if done and (self.joy_stick_buffer.keys & WirelessButtons.L1):
+                self.get_logger().info("L1 button pressed, switching to shadowing agent.")
                 self.current_agent_name = "shadowing"
                 self.available_agents[self.current_agent_name].reset()
             self.send_action(action)

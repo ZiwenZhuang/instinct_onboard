@@ -163,12 +163,16 @@ class MotionTargetPublisher(Node):
             # Here you can check if the robot is ready to startupdate_heading_matching_quat the motion
             # For example, you can check if the IMU state and wireless controller state are available
             if hasattr(self, "imu_state") and hasattr(self, "wireless_controller_state"):
-                self.update_heading_matching_quat()
                 self.current_state = "ready"
-                self.get_logger().info("Motion Target Publisher is ready. Transitioning to 'ready' state.")
+                self.get_logger().info(
+                    "Motion Target Publisher is ready. Transitioning to 'ready' state. Press 'up' to update heading matching quaternion."
+                )
         elif self.current_state == "ready":
             self.publish_starting_motion_target()
             if self.wireless_controller_state.keys & robot_cfgs.WirelessButtons.up:
+                self.update_heading_matching_quat()
+                self.get_logger().info("Heading matching quaternion updated.", throttle_duration_sec=1)
+            if self.wireless_controller_state.keys & robot_cfgs.WirelessButtons.L1:
                 self.current_state = "motion"
                 self.get_logger().info("Starting motion target publishing. Transitioning to 'motion' state.")
         elif self.current_state == "motion":
