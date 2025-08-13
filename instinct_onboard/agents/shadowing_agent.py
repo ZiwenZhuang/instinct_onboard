@@ -76,6 +76,7 @@ class ShadowingAgent(OnboardAgent):
 
     def step(self):
         """Perform a single step of the agent."""
+        self.ros_node.refresh_time_to_target()
         self._update_links_poses()
         # due to the model which reads the motion sequence, and then concat at the end of the proioception vector, we get obs term one by one.
 
