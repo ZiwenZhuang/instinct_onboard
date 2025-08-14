@@ -28,6 +28,8 @@ class ShadowingAgent(OnboardAgent):
 
     def _parse_obs_config(self):
         super()._parse_obs_config()
+        self.rotation_reference_in_base_frame = self.cfg["commands"]["rotation_ref_command"]["in_base_frame"]
+        self.ros_node.get_logger().info(f"Rotation reference in base frame: {self.rotation_reference_in_base_frame}")
         with open(os.path.join(self.logdir, "params", "agent.yaml")) as f:
             self.agent_cfg = yaml.unsafe_load(f)
         self.motion_ref_obs_names = self.agent_cfg["policy"]["encoder_configs"]["motion_ref"]["component_names"]
@@ -167,12 +169,15 @@ class ShadowingAgent(OnboardAgent):
     def _get_rotation_ref_command_obs(self):
         """Command, return shape: (num_frames, 6)"""
         root_quat_w_ref_ = self.ros_node.packed_motion_sequence_buffer["root_quat_w"]  # (num_frames, 4)
-        root_quat_w_ = self.ros_node._get_quat_w_obs()[None, :]  # (1, 4)
-        root_quat_w_ref = quaternion.from_float_array(root_quat_w_ref_)  # (num_frames, 4)
-        root_quat_w = quaternion.from_float_array(root_quat_w_)  # (1, 4)
-        root_quat_err = root_quat_w.conjugate() * root_quat_w_ref  # (num_frames, 4)
-        root_tannorm_err = quat_to_tan_norm_batch(root_quat_err)  # (num_frames, 6)
-        return root_tannorm_err  # (num_frames, 6), in tangent-normal form
+        if self.rotation_reference_in_base_frame:
+            root_quat_w_ = self.ros_node._get_quat_w_obs()[None, :]  # (1, 4)
+            root_quat_w_ref = quaternion.from_float_array(root_quat_w_ref_)  # (num_frames, 4)
+            root_quat_w = quaternion.from_float_array(root_quat_w_)  # (1, 4)
+            root_quat_err = root_quat_w.conjugate() * root_quat_w_ref  # (num_frames, 4)
+            root_tannorm_cmd = quat_to_tan_norm_batch(root_quat_err)  # (num_frames, 6)
+        else:
+            root_tannorm_cmd = quat_to_tan_norm_batch(root_quat_w_ref_)  # (num_frames, 6)
+        return root_tannorm_cmd  # (num_frames, 6), in tangent-normal form
 
     def _get_position_ref_command_mask_obs(self):
         """Command, return shape: (num_frames, 2)"""
