@@ -52,10 +52,10 @@ class ShadowingNodeMixin:
             root_pos_b[i, 0] = frame.pos_b.x
             root_pos_b[i, 1] = frame.pos_b.y
             root_pos_b[i, 2] = frame.pos_b.z
-            root_quat_w[i, 0] = frame.quat_w.x
-            root_quat_w[i, 1] = frame.quat_w.y
-            root_quat_w[i, 2] = frame.quat_w.z
-            root_quat_w[i, 3] = frame.quat_w.w
+            root_quat_w[i, 0] = frame.quat_w.w
+            root_quat_w[i, 1] = frame.quat_w.x
+            root_quat_w[i, 2] = frame.quat_w.y
+            root_quat_w[i, 3] = frame.quat_w.z
             for j in range(num_joints):
                 joint_pos[i, j] = frame.joint_pos[j]  # in urdf space, simulation order.
                 joint_pos_mask[i, j] = frame.joint_pos_mask[j]  # (num_frames, num_joints)
