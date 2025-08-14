@@ -182,8 +182,10 @@ class MotionTargetPublisher(Node):
             raise SystemExit(0)
 
         if hasattr(self, "wireless_controller_state"):
-            if (self.wireless_controller_state.keys & robot_cfgs.WirelessButtons.L2) or (
-                self.wireless_controller_state.keys & robot_cfgs.WirelessButtons.R2
+            if (
+                (self.wireless_controller_state.keys & robot_cfgs.WirelessButtons.L2)
+                or (self.wireless_controller_state.keys & robot_cfgs.WirelessButtons.R2)
+                or (self.wireless_controller_state.keys & robot_cfgs.WirelessButtons.down)
             ):
                 self.get_logger().info("Stopping motion target publishing. Exiting.")
                 self.current_state = "done"
@@ -289,8 +291,6 @@ class MotionTargetPublisher(Node):
             if time_to_target < 0:
                 if self.args.nonstop_at_exhausted:
                     time_to_target = self.motion_update_period_s * (i + 1)
-                else:
-                    time_to_target = -1.0
             motion_frame.time_to_target = time_to_target
             motion_frame.pos_b.x = pos_b[0].item()
             motion_frame.pos_b.y = pos_b[1].item()
