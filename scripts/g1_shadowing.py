@@ -52,7 +52,7 @@ class G1ShadowingNode(ShadowingNode):
         elif self.current_agent_name == "shadowing":
             action, done = self.available_agents[self.current_agent_name].step()
             if done:
-                self.get_logger().info("ShadowingAgent done.")
+                self.get_logger().info("ShadowingAgent done.", throttle_duration_sec=5.0)
             self.send_action(action)
 
 

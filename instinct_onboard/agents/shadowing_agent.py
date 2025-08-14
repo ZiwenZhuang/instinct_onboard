@@ -4,6 +4,7 @@ import os
 
 import numpy as np
 import onnxruntime as ort
+import prettytable
 import quaternion
 import yaml
 from geometry_msgs.msg import PoseArray
@@ -34,6 +35,12 @@ class ShadowingAgent(OnboardAgent):
         all_obs_names = list(self.obs_funcs.keys())
         self.proprio_obs_names = [obs_name for obs_name in all_obs_names if obs_name not in self.motion_ref_obs_names]
         self.ros_node.get_logger().info(f"ShadowingAgent proprioception names: {self.proprio_obs_names}")
+        table = prettytable.PrettyTable()
+        table.field_names = ["Observation Name", "Function"]
+        for obs_name, func in self.obs_funcs.items():
+            table.add_row([obs_name, func.__name__])
+        print("Observation functions:")
+        print(table)
 
     def _parse_observation_function(self, obs_name, obs_config):
         obs_func = obs_config["func"].split(":")[-1]  # get the function name from the config
@@ -160,9 +167,9 @@ class ShadowingAgent(OnboardAgent):
     def _get_rotation_ref_command_obs(self):
         """Command, return shape: (num_frames, 6)"""
         root_quat_w_ref_ = self.ros_node.packed_motion_sequence_buffer["root_quat_w"]  # (num_frames, 4)
-        root_quat_w = self.ros_node._get_quat_w_obs()[None, :]  # (1, 4)
+        root_quat_w_ = self.ros_node._get_quat_w_obs()[None, :]  # (1, 4)
         root_quat_w_ref = quaternion.from_float_array(root_quat_w_ref_)  # (num_frames, 4)
-        root_quat_w = quaternion.from_float_array(root_quat_w)  # (1, 4)
+        root_quat_w = quaternion.from_float_array(root_quat_w_)  # (1, 4)
         root_quat_err = root_quat_w.conjugate() * root_quat_w_ref  # (num_frames, 4)
         root_tannorm_err = quat_to_tan_norm_batch(root_quat_err)  # (num_frames, 6)
         return root_tannorm_err  # (num_frames, 6), in tangent-normal form

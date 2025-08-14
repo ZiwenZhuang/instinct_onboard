@@ -23,7 +23,7 @@ class OnboardAgent(ABC):
             ros_node (Ros2Real): The ROS node instance to interact with the robot.
         """
         self.logdir = logdir
-        self.ros_node = ros_node
+        self.ros_node: Ros2Real = ros_node
         assert isinstance(self.ros_node, Ros2Real), "ros_node must be an instance of Ros2Real"
         env_yaml = os.path.join(self.logdir, "params", "env.yaml")
         with open(env_yaml) as f:

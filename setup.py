@@ -10,6 +10,7 @@ setup(
         "pyyaml",
         # 'rclpy',
         "transformations",
+        "prettytable",
         "onnxruntime",
         "empy==3.3.2",  # codespell:ignore
     ],
