@@ -24,7 +24,6 @@ class Ros2Real(Node):
         low_cmd_topic: str = "/lowcmd",
         imu_state_topic: str = "/secondary_imu",
         joy_stick_topic: str = "/wirelesscontroller",
-        cfg: dict = dict(),  # default env cfg to read from. Typically from a env.yaml in your logdir
         computer_clip_torque=True,  # if True, the actions will be clipped by torque limits
         joint_pos_protect_ratio=1.5,  # if the joint_pos is out of the range of this ratio, the process will shutdown.
         kp_factor=1.0,  # the factor to multiply the p_gain
@@ -43,7 +42,6 @@ class Ros2Real(Node):
             low_cmd_topic if not dryrun else low_cmd_topic + "_dryrun_" + str(np.random.randint(0, 65535))
         )
         self.joy_stick_topic = joy_stick_topic
-        self.cfg = cfg
         self.computer_clip_torque = computer_clip_torque
         self.joint_pos_protect_ratio = joint_pos_protect_ratio
         self.kp_factor = kp_factor
@@ -68,44 +66,6 @@ class Ros2Real(Node):
         self.gravity_vec = np.zeros(3)
         self.gravity_vec[self.up_axis_idx] = -1
 
-        # controls
-        self.default_joint_pos = np.zeros(self.NUM_JOINTS, dtype=np.float32)
-        for joint_name_expr, joint_pos in self.cfg["scene"]["robot"]["init_state"]["joint_pos"].items():
-            # compute the default joint pos from configuration for articulation.default_joint_pos
-            for i in range(self.NUM_JOINTS):
-                name = self.sim_joint_names[i]
-                if re.search(joint_name_expr, name):
-                    self.default_joint_pos[i] = joint_pos
-        self.p_gains = np.zeros(self.NUM_JOINTS, dtype=np.float32)
-        self.d_gains = np.zeros(self.NUM_JOINTS, dtype=np.float32)
-        for actuator_name, actuator_config in self.cfg["scene"]["robot"]["actuators"].items():
-            assert (
-                "PDActuator" in actuator_config["class_type"]
-            ), "Only PDActuator trained model is supported for now. Get {} in actuator {}".format(
-                actuator_config["class_type"], actuator_name
-            )
-            for i in range(self.NUM_JOINTS):
-                name = self.sim_joint_names[i]
-                for _, joint_name_expr in enumerate(actuator_config["joint_names_expr"]):
-                    if re.search(joint_name_expr, name):
-                        if isinstance(actuator_config["stiffness"], dict):
-                            for key, value in actuator_config["stiffness"].items():
-                                if re.search(key, name):
-                                    self.p_gains[i] = value
-                        else:
-                            self.p_gains[i] = actuator_config["stiffness"]
-                        if isinstance(actuator_config["damping"], dict):
-                            for key, value in actuator_config["damping"].items():
-                                if re.search(key, name):
-                                    self.d_gains[i] = value
-                        else:
-                            self.d_gains[i] = actuator_config["damping"]
-                        # print(f"Joint {i}({self.sim_joint_names[i]}) has p_gain {self.p_gains[i]} and d_gain {self.d_gains[i]}")
-        self.p_gains *= self.kp_factor
-        self.d_gains *= self.kd_factor
-        self.get_logger().info(f"default_joint_pos: {self.default_joint_pos}")
-        self.get_logger().info(f"PD gains are set to: p_gains: {self.p_gains}, d_gains: {self.d_gains}")
-        self.get_logger().info(f"PD gains are set by kp_factor: {self.kp_factor}, kd_factor: {self.kd_factor}")
         self.torque_limits = getattr(robot_cfgs, self.robot_class_name).torque_limits * self.torque_limits_ratio
         self.get_logger().info(f"Torque limits are set by ratio of : {self.torque_limits_ratio}")
 
@@ -115,24 +75,7 @@ class Ros2Real(Node):
         )  # in robot urdf coordinate, but in simulation order. no offset subtracted
         self.joint_vel_ = np.zeros(self.NUM_JOINTS, dtype=np.float32)
 
-        # actions
-        self.action_scale = np.zeros(self.NUM_ACTIONS, dtype=np.float32)
-        for action_names, action_config in self.cfg["actions"].items():
-            if not action_config["asset_name"] == "robot":
-                continue
-            for i in range(self.NUM_JOINTS):
-                name = self.sim_joint_names[i]
-                for _, joint_name_expr in enumerate(action_config["joint_names"]):
-                    if re.search(joint_name_expr, name):
-                        self.action_scale[i] = action_config["scale"]
-                        # print("Joint {}({}) has action scale {}".format(i, name, self.action_scale[i]))
-                    if not action_config["use_default_offset"]:
-                        # not using articulation.default_joint_pos as default offset
-                        if isinstance(action_config["offset"], dict):
-                            self.default_joint_pos[i] = action_config["offset"][joint_name_expr]
-                        else:
-                            self.default_joint_pos[i] = action_config["offset"]
-        self.actions_raw = np.zeros(self.NUM_ACTIONS, dtype=np.float32)
+        # action (for get_last_action_obs across multiple agents)
         self.actions = np.zeros(self.NUM_ACTIONS, dtype=np.float32)
 
         # hardware related, in simulation order
@@ -186,10 +129,6 @@ class Ros2Real(Node):
         if self.imu_state_topic is not None:
             buffer_ready = buffer_ready and hasattr(self, "torso_imu_buffer")
         return buffer_ready
-
-    def get_cfg_main_loop_duration(self):
-        """Get the main running frequency based on self.cfg, which is typically from env.yaml."""
-        return self.cfg["sim"]["dt"] * self.cfg["decimation"]
 
     """
     ROS callbacks and handlers that update the buffer
@@ -284,9 +223,6 @@ class Ros2Real(Node):
     def _get_joint_pos_obs(self):
         return self.joint_pos_
 
-    def _get_joint_pos_rel_obs(self):
-        return self.joint_pos_ - self.default_joint_pos
-
     def _get_joint_vel_obs(self):
         return self.joint_vel_
 
@@ -297,48 +233,64 @@ class Ros2Real(Node):
     Control related functions
     """
 
-    def clip_by_torque_limit(self, actions_scaled):
-        """Different from simulation, we reverse the process and clip the actions directly,
+    def clip_by_torque_limit(
+        self,
+        target_joint_pos,
+        p_gains: np.ndarray = 0.0,
+        d_gains: np.ndarray = 0.0,
+    ):
+        """Different from simulation, we reverse the process and clip the target position directly,
         so that the PD controller runs in robot but not our script.
         """
+        p_limits_low = (-self.torque_limits) + d_gains * self.joint_vel_
+        p_limits_high = (self.torque_limits) + d_gains * self.joint_vel_
+        action_low = (p_limits_low / p_gains) + self.joint_pos_
+        action_high = (p_limits_high / p_gains) + self.joint_pos_
 
-        # NOTE: Currently only support position control with PD controller
-        p_limits_low = (-self.torque_limits) + self.d_gains * self.joint_vel_
-        p_limits_high = (self.torque_limits) + self.d_gains * self.joint_vel_
-        actions_low = (p_limits_low / self.p_gains) - self.default_joint_pos + self.joint_pos_
-        actions_high = (p_limits_high / self.p_gains) - self.default_joint_pos + self.joint_pos_
+        return np.clip(target_joint_pos, action_low, action_high)
 
-        return np.clip(actions_scaled, actions_low, actions_high)
-
-    def send_action(self, actions):
+    def send_action(
+        self,
+        action: np.array,
+        action_offset: np.array = 0.0,
+        action_scale: np.ndarray = 1.0,
+        p_gains: np.ndarray = 0.0,
+        d_gains: np.ndarray = 0.0,
+    ):
         """Send the action to the robot motors, which does the preprocessing
         just like env.step in simulation.
+        However, since this process only controls one robot, the action is not batched.
+        NOTE: when switching between agents, the last_action term should be shared between agents.
+        Thus, the ros node has to update the action buffer
         """
-        # NOTE: Only calling this function currently will update self.action for self._get_last_actions_obs
-        self.actions[:] = actions
-        self.action_publisher.publish(Float32MultiArray(data=actions))
-        if self.computer_clip_torque:
-            clipped_scaled_action = self.clip_by_torque_limit(actions * self.action_scale)
-            clipped_joints = np.where(clipped_scaled_action != actions * self.action_scale)[0]
-            if len(clipped_joints) > 0:
-                self.get_logger().warn(
-                    f"Computer Clip Torque is True, the following joints (sim) are clipped: {clipped_joints}",
-                    throttle_duration_sec=5,
-                )
-        else:
-            self.get_logger().warn("Computer Clip Torque is False, the robot may be damaged.", throttle_duration_sec=5)
-            clipped_scaled_action = actions * self.action_scale
-        robot_coordinates_action = clipped_scaled_action + self.default_joint_pos
-        if np.isnan(actions).any():
+        # NOTE: Only calling this function currently will update self.action for self._get_last_action_obs
+        self.action[:] = action
+        self.action_publisher.publish(Float32MultiArray(data=action))
+        action_scaled = action * action_scale
+        target_joint_pos = action_scaled + action_offset
+        p_gains = np.clip(p_gains * self.kp_factor, 0.0, 500.0)
+        d_gains = np.clip(d_gains * self.kd_factor, 0.0, 5.0)
+        if np.isnan(action).any():
             self.get_logger().error("Actions contain NaN, Skip sending the action to the robot.")
             return
-        self._publish_legs_cmd(robot_coordinates_action)
+        if self.computer_clip_torque:
+            target_joint_pos = self.clip_by_torque_limit(
+                target_joint_pos,
+                p_gains=p_gains,
+                d_gains=d_gains,
+            )
+        self._publish_motor_cmd(target_joint_pos, p_gains=p_gains, d_gains=d_gains)
 
     """
     Functions that actually publish the commands and take effect
     """
 
-    def _publish_legs_cmd(self, robot_coordinates_action: np.array):
+    def _publish_legs_cmd(
+        self,
+        target_joint_pos: np.array,  # shape (NUM_JOINTS,), in simulation order
+        p_gains: np.ndarray,  # In the order of simulation joints, not real joints
+        d_gains: np.ndarray,  # In the order of simulation joints, not real joints
+    ):
         """Publish the joint commands to the robot legs in robot coordinates system.
         robot_coordinates_action: shape (NUM_JOINTS,), in simulation order.
         """
@@ -346,16 +298,14 @@ class Ros2Real(Node):
             real_idx = self.joint_map[sim_idx]
             if not self.dryrun:
                 self.low_cmd_buffer.motor_cmd[real_idx].mode = self.turn_on_motor_mode[sim_idx]
-            self.low_cmd_buffer.motor_cmd[real_idx].q = (
-                robot_coordinates_action[sim_idx] * self.joint_signs[sim_idx]
-            ).item()
+            self.low_cmd_buffer.motor_cmd[real_idx].q = (target_joint_pos[sim_idx] * self.joint_signs[sim_idx]).item()
             self.low_cmd_buffer.motor_cmd[real_idx].dq = 0.0
             self.low_cmd_buffer.motor_cmd[real_idx].tau = 0.0
-            self.low_cmd_buffer.motor_cmd[real_idx].kp = self.p_gains[sim_idx].item()
-            self.low_cmd_buffer.motor_cmd[real_idx].kd = self.d_gains[sim_idx].item()
+            self.low_cmd_buffer.motor_cmd[real_idx].kp = p_gains[sim_idx].item()
+            self.low_cmd_buffer.motor_cmd[real_idx].kd = d_gains[sim_idx].item()
 
         self.low_cmd_buffer.crc = get_crc(self.low_cmd_buffer)
-        if np.isnan(robot_coordinates_action).any():
+        if np.isnan(target_joint_pos).any():
             self.get_logger().error("Robot coordinates action contain NaN, Skip sending the action to the robot.")
             return
         self.low_cmd_publisher.publish(self.low_cmd_buffer)

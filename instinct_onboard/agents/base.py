@@ -1,4 +1,5 @@
 import os
+import re
 from abc import ABC, abstractmethod
 from collections import OrderedDict
 from typing import Tuple
@@ -28,6 +29,59 @@ class OnboardAgent(ABC):
         env_yaml = os.path.join(self.logdir, "params", "env.yaml")
         with open(env_yaml) as f:
             self.cfg = yaml.unsafe_load(f)
+
+    def _parse_action_config(self):
+        """Parse control-related configurations from the environment YAML file."""
+
+        # default joint positions
+        self.default_joint_pos = np.zeros(self.ros_node.NUM_JOINTS, dtype=np.float32)
+        for joint_name_expr, joint_pos in self.cfg["scene"]["robot"]["init_state"]["joint_pos"].items():
+            # compute the default joint pos from configuration for articulation.default_joint_pos
+            for i in range(self.ros_node.NUM_JOINTS):
+                name = self.ros_node.sim_joint_names[i]
+                if re.search(joint_name_expr, name):
+                    self.default_joint_pos[i] = joint_pos
+
+        # stiffness and damping gains
+        self._p_gains = np.zeros(self.ros_node.NUM_JOINTS, dtype=np.float32)
+        self._d_gains = np.zeros(self.ros_node.NUM_JOINTS, dtype=np.float32)
+        for actuator_name, actuator_config in self.cfg["scene"]["robot"]["actuators"].items():
+            print(f"Get {actuator_config['class_type']} in actuator {actuator_name}")
+            for i in range(self.ros_node.NUM_JOINTS):
+                name = self.ros_node.sim_joint_names[i]
+                for _, joint_name_expr in enumerate(actuator_config["joint_names_expr"]):
+                    if re.search(joint_name_expr, name):
+                        if isinstance(actuator_config["stiffness"], dict):
+                            for key, value in actuator_config["stiffness"].items():
+                                if re.search(key, name):
+                                    self._p_gains[i] = value
+                        else:
+                            self._p_gains[i] = actuator_config["stiffness"]
+                        if isinstance(actuator_config["damping"], dict):
+                            for key, value in actuator_config["damping"].items():
+                                if re.search(key, name):
+                                    self._d_gains[i] = value
+                        else:
+                            self._d_gains[i] = actuator_config["damping"]
+
+        # action scale
+        self._action_scale = np.zeros(self.ros_node.NUM_ACTIONS, dtype=np.float32)
+        self._action_offset = self.default_joint_pos.copy()  # default action offset in robot urdf coordinate
+        for action_names, action_config in self.cfg["actions"].items():
+            if not action_config["asset_name"] == "robot":
+                continue
+            for i in range(self.ros_node.NUM_JOINTS):
+                name = self.ros_node.sim_joint_names[i]
+                for _, joint_name_expr in enumerate(action_config["joint_names"]):
+                    if re.search(joint_name_expr, name):
+                        self._action_scale[i] = action_config["scale"]
+                        # print("Joint {}({}) has action scale {}".format(i, name, self.action_scale[i]))
+                    if not action_config["use_default_offset"]:
+                        # not using articulation.default_joint_pos as default offset
+                        if isinstance(action_config["offset"], dict):
+                            self._action_offset[i] = action_config["offset"][joint_name_expr]
+                        else:
+                            self._action_offset[i] = action_config["offset"]
 
     def _parse_obs_config(self):
         """Parse, set attributes from config dict, initialize buffers to speed up the computation"""
@@ -134,6 +188,32 @@ class OnboardAgent(ABC):
         for obs_history_buffer in self.obs_history_buffers.values():
             obs_history_buffer.reset()
 
+    @property
+    def action_scale(self) -> np.ndarray:
+        return self._action_scale
+
+    @property
+    def action_offset(self) -> np.ndarray:
+        return self._action_offset
+
+    @property
+    def p_gains(self) -> np.ndarray:
+        """Get the proportional gains for the PD controller."""
+        return self._p_gains
+
+    @property
+    def d_gains(self) -> np.ndarray:
+        """Get the derivative gains for the PD controller."""
+        return self._d_gains
+
+    """
+    Some observation functions that depends on the agent's cfg
+    """
+
+    def _get_joint_pos_rel_obs(self) -> np.ndarray:
+        """Get the joint position relative to the default_joint_pos."""
+        return self.ros_node.joint_pos_ - self.default_joint_pos  # shape (NUM_JOINTS,)
+
 
 class ColdStartAgent(OnboardAgent):
     def __init__(self, startup_step_size: float, ros_node: Ros2Real, joint_target_pos: np.array = None):
@@ -145,12 +225,16 @@ class ColdStartAgent(OnboardAgent):
         self.ros_node = ros_node
         self.startup_step_size = startup_step_size
         self.joint_target_pos = np.zeros(self.ros_node.NUM_JOINTS) if joint_target_pos is None else joint_target_pos
+        self._action_offset = np.zeros(self.ros_node.NUM_JOINTS, dtype=np.float32)
+        self._action_scale = np.ones(self.ros_node.NUM_JOINTS, dtype=np.float32)
+        self._p_gains = np.ones(self.ros_node.NUM_JOINTS, dtype=np.float32) * 10.0  # default p_gains
+        self._d_gains = np.zeros(self.ros_node.NUM_JOINTS, dtype=np.float32)  # default d_gains
 
     def step(self) -> Tuple[np.ndarray, bool]:
         """Run a single step of the cold start agent. This will turn on the motors to a desired position.
         The desired position is defined in the robot configuration.
         """
-        dof_pos_err = self.joint_target_pos - self.ros_node._get_joint_pos_rel_obs()
+        dof_pos_err = self.joint_target_pos - self.ros_node._get_joint_pos_obs()
         err_large_mask = np.abs(dof_pos_err) > self.startup_step_size
         done = not err_large_mask.any()
         if not done:
@@ -159,10 +243,10 @@ class ColdStartAgent(OnboardAgent):
             )
         dof_pos_target = np.where(
             err_large_mask,
-            self.ros_node._get_joint_pos_rel_obs() + np.sign(dof_pos_err) * self.startup_step_size,
+            self.ros_node._get_joint_pos_obs() + np.sign(dof_pos_err) * self.startup_step_size,
             self.joint_target_pos,
         )
-        actions = (dof_pos_target) / self.ros_node.action_scale
+        actions = dof_pos_target
 
         return actions, done
 
