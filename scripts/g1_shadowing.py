@@ -22,7 +22,7 @@ class G1ShadowingNode(ShadowingNode):
 
     def start_ros_handlers(self):
         super().start_ros_handlers()
-        main_loop_duration = self.get_cfg_main_loop_duration()
+        main_loop_duration = 0.02
         self.get_logger().info(f"Starting main loop with duration: {main_loop_duration} seconds.")
         self.main_loop_timer = self.create_timer(main_loop_duration, self.main_loop_callback)
 
@@ -48,12 +48,24 @@ class G1ShadowingNode(ShadowingNode):
                 self.get_logger().info("L1 button pressed, switching to shadowing agent.")
                 self.current_agent_name = "shadowing"
                 self.available_agents[self.current_agent_name].reset()
-            self.send_action(action)
+            self.send_action(
+                action,
+                self.available_agents[self.current_agent_name].action_offset,
+                self.available_agents[self.current_agent_name].action_scale,
+                self.available_agents[self.current_agent_name].p_gains,
+                self.available_agents[self.current_agent_name].d_gains,
+            )
         elif self.current_agent_name == "shadowing":
             action, done = self.available_agents[self.current_agent_name].step()
             if done:
                 self.get_logger().info("ShadowingAgent done.", throttle_duration_sec=5.0)
-            self.send_action(action)
+            self.send_action(
+                action,
+                self.available_agents[self.current_agent_name].action_offset,
+                self.available_agents[self.current_agent_name].action_scale,
+                self.available_agents[self.current_agent_name].p_gains,
+                self.available_agents[self.current_agent_name].d_gains,
+            )
 
 
 def main(args):

@@ -24,6 +24,7 @@ class ShadowingAgent(OnboardAgent):
         super().__init__(logdir, ros_node)
         self.ort_sessions = dict()
         self._parse_obs_config()
+        self._parse_action_config()
         self._load_models()
 
     def _parse_obs_config(self):
@@ -268,7 +269,6 @@ class MotionAsActAgent(OnboardAgent):
             current_joint_pos[over_threshold_mask] + np.sign(joint_diff[over_threshold_mask]) * self.joint_diff_scale
         )
         print(f"Joint Error max: {np.abs(joint_diff).max():.3f}", end="\r")
-        action = (command_joint_pos - self.ros_node.default_joint_pos) / self.ros_node.action_scale
-        action = action.astype(np.float32)
+        action = command_joint_pos.astype(np.float32)
         done = not np.any(over_threshold_mask)  # done if all joint positions are within the threshold
         return action, done
