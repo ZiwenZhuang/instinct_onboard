@@ -24,7 +24,13 @@ class ExampleNode(Ros2Real):
         self.get_logger().info("ExampleNode main loop is running.", throttle_duration_sec=5.0)
         # You can also call agent methods here if needed.
         action, done = self.agent.step()
-        self.send_action(action)
+        self.send_action(
+            action,
+            action_offset=self.agent.action_offset,
+            action_scale=self.agent.action_scale,
+            p_gains=self.agent.p_gains,
+            d_gains=self.agent.d_gains,
+        )
 
 
 def main(args):
