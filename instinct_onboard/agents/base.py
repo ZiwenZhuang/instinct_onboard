@@ -216,19 +216,35 @@ class OnboardAgent(ABC):
 
 
 class ColdStartAgent(OnboardAgent):
-    def __init__(self, startup_step_size: float, ros_node: Ros2Real, joint_target_pos: np.array = None):
+    def __init__(
+        self,
+        startup_step_size: float,
+        ros_node: Ros2Real,
+        joint_target_pos: np.array = None,
+        action_scale: np.array = None,
+        action_offset: np.array = None,
+        p_gains: np.array = None,
+        d_gains: np.array = None,
+    ):
         """Initialize the cold start agent.
         Args:
             startup_step_size (float): The step size for the cold start agent to move the joints.
             ros_node (Ros2Real): The ROS node instance to interact with the robot.
+            action_scale:
+            action_offset: Due to the last_action sharing mechanism, it is sometimes needed to specify the
+                action scale and action offset in the cold-start agent.
         """
         self.ros_node = ros_node
         self.startup_step_size = startup_step_size
         self.joint_target_pos = np.zeros(self.ros_node.NUM_JOINTS) if joint_target_pos is None else joint_target_pos
-        self._action_offset = np.zeros(self.ros_node.NUM_JOINTS, dtype=np.float32)
-        self._action_scale = np.ones(self.ros_node.NUM_JOINTS, dtype=np.float32)
-        self._p_gains = np.ones(self.ros_node.NUM_JOINTS, dtype=np.float32) * 10.0  # default p_gains
-        self._d_gains = np.zeros(self.ros_node.NUM_JOINTS, dtype=np.float32)  # default d_gains
+        self._action_offset = (
+            np.zeros(self.ros_node.NUM_JOINTS, dtype=np.float32) if action_scale is None else action_scale
+        )
+        self._action_scale = (
+            np.ones(self.ros_node.NUM_JOINTS, dtype=np.float32) if action_offset is None else action_offset
+        )
+        self._p_gains = np.ones(self.ros_node.NUM_JOINTS, dtype=np.float32) * 10.0 if p_gains is None else p_gains
+        self._d_gains = np.zeros(self.ros_node.NUM_JOINTS, dtype=np.float32) if d_gains is None else d_gains
 
     def step(self) -> Tuple[np.ndarray, bool]:
         """Run a single step of the cold start agent. This will turn on the motors to a desired position.
