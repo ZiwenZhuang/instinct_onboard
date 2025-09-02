@@ -3,7 +3,7 @@ import re
 import numpy as np
 import rclpy
 from rclpy.node import Node
-from std_msgs.msg import Float32MultiArray, String
+from std_msgs.msg import Float32MultiArray
 from unitree_go.msg import WirelessController
 from unitree_hg.msg import IMUState, LowCmd, LowState  # MotorState,; MotorCmd,
 
@@ -263,8 +263,8 @@ class Ros2Real(Node):
         NOTE: when switching between agents, the last_action term should be shared between agents.
         Thus, the ros node has to update the action buffer
         """
-        # NOTE: Only calling this function currently will update self.action for self._get_last_action_obs
-        self.action[:] = action
+        # NOTE: Only calling this function currently will update self.actions for self._get_last_action_obs
+        self.actions[:] = action
         self.action_publisher.publish(Float32MultiArray(data=action))
         action_scaled = action * action_scale
         target_joint_pos = action_scaled + action_offset
@@ -285,13 +285,13 @@ class Ros2Real(Node):
     Functions that actually publish the commands and take effect
     """
 
-    def _publish_legs_cmd(
+    def _publish_motor_cmd(
         self,
         target_joint_pos: np.array,  # shape (NUM_JOINTS,), in simulation order
         p_gains: np.ndarray,  # In the order of simulation joints, not real joints
         d_gains: np.ndarray,  # In the order of simulation joints, not real joints
     ):
-        """Publish the joint commands to the robot legs in robot coordinates system.
+        """Publish the joint commands to the robot motors in robot coordinates system.
         robot_coordinates_action: shape (NUM_JOINTS,), in simulation order.
         """
         for sim_idx in range(self.NUM_JOINTS):
