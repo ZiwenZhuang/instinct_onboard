@@ -71,11 +71,7 @@ class G1ShadowingNode(ShadowingNode):
 def main(args):
     rclpy.init()
 
-    with open(os.path.join(args.logdir, "params", "env.yaml")) as f:
-        cfg = yaml.unsafe_load(f)
-
     node = G1ShadowingNode(
-        cfg=cfg,
         dryrun=not args.nodryrun,
     )
 
