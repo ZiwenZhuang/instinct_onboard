@@ -90,7 +90,8 @@ def yaw_quat(quat: np.quaternion) -> np.quaternion:
     qx = quat.x
     qy = quat.y
     qz = quat.z
-    yaw = np.atan2(2 * (qw * qz + qx * qy), 1 - 2 * (qy * qy + qz * qz))
+    # NOTE: arctan2 is used instead of atan2 because numpy 1.24.4 does not have atan2.
+    yaw = np.arctan2(2 * (qw * qz + qx * qy), 1 - 2 * (qy * qy + qz * qz))
     quat_yaw = np.zeros(4)
     quat_yaw[3] = np.sin(yaw / 2)
     quat_yaw[0] = np.cos(yaw / 2)
