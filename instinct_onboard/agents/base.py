@@ -42,6 +42,14 @@ class OnboardAgent(ABC):
                 if re.search(joint_name_expr, name):
                     self.default_joint_pos[i] = joint_pos
 
+        # default joint velocities
+        self.default_joint_vel = np.zeros(self.ros_node.NUM_JOINTS, dtype=np.float32)
+        for joint_name_expr, joint_vel in self.cfg["scene"]["robot"]["init_state"]["joint_vel"].items():
+            for i in range(self.ros_node.NUM_JOINTS):
+                name = self.ros_node.sim_joint_names[i]
+                if re.search(joint_name_expr, name):
+                    self.default_joint_vel[i] = joint_vel
+
         # stiffness and damping gains
         self._p_gains = np.zeros(self.ros_node.NUM_JOINTS, dtype=np.float32)
         self._d_gains = np.zeros(self.ros_node.NUM_JOINTS, dtype=np.float32)
@@ -74,7 +82,12 @@ class OnboardAgent(ABC):
                 name = self.ros_node.sim_joint_names[i]
                 for _, joint_name_expr in enumerate(action_config["joint_names"]):
                     if re.search(joint_name_expr, name):
-                        self._action_scale[i] = action_config["scale"]
+                        if isinstance(action_config["scale"], dict):
+                            for key, value in action_config["scale"].items():
+                                if re.search(key, name):
+                                    self._action_scale[i] = value
+                        else:
+                            self._action_scale[i] = action_config["scale"]
                         # print("Joint {}({}) has action scale {}".format(i, name, self.action_scale[i]))
                     if not action_config["use_default_offset"]:
                         # not using articulation.default_joint_pos as default offset
@@ -214,6 +227,10 @@ class OnboardAgent(ABC):
         """Get the joint position relative to the default_joint_pos."""
         return self.ros_node.joint_pos_ - self.default_joint_pos  # shape (NUM_JOINTS,)
 
+    def _get_joint_vel_rel_obs(self) -> np.ndarray:
+        """Get the joint velocity relative to the default_joint_pos."""
+        return self.ros_node.joint_vel_ - self.default_joint_vel  # shape (NUM_JOINTS,)
+
 
 class ColdStartAgent(OnboardAgent):
     def __init__(
@@ -254,15 +271,17 @@ class ColdStartAgent(OnboardAgent):
         err_large_mask = np.abs(dof_pos_err) > self.startup_step_size
         done = not err_large_mask.any()
         if not done:
+            max_err_idx = np.argmax(np.abs(dof_pos_err))
             print(
-                f"Current ColdStartAgent gets max error {np.round(np.max(np.abs(dof_pos_err)), decimals=2)}", end="\r"
+                f"Current ColdStartAgent gets max error {np.round(np.max(np.abs(dof_pos_err)), decimals=3):.3f} at sim joint {max_err_idx:2d}, should be {self.joint_target_pos[max_err_idx]:.3f} but currently is {self.ros_node._get_joint_pos_obs()[max_err_idx]:.3f}",
+                end="\r",
             )
         dof_pos_target = np.where(
             err_large_mask,
             self.ros_node._get_joint_pos_obs() + np.sign(dof_pos_err) * self.startup_step_size,
             self.joint_target_pos,
         )
-        actions = dof_pos_target
+        actions = (dof_pos_target - self._action_offset) / self._action_scale
 
         return actions, done
 
