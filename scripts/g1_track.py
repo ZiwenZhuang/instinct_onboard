@@ -122,7 +122,7 @@ def main(args):
         motion_file=args.motion_file,
         ros_node=node,
     )
-    cold_start_agent = tracking_agent.get_cold_start_agent(args.startup_step_size)
+    cold_start_agent = tracking_agent.get_cold_start_agent(args.startup_step_size, args.kpkd_factor)
 
     node.register_agent("cold_start", cold_start_agent)
     node.register_agent("tracking", tracking_agent)
@@ -164,6 +164,12 @@ if __name__ == "__main__":
         action="store_true",
         default=False,
         help="Run the node without dry run mode (default: False)",
+    )
+    parser.add_argument(
+        "--kpkd_factor",
+        type=float,
+        default=1.0,
+        help="KPKD factor for the cold start agent (default: 1.0)",
     )
     parser.add_argument(
         "--debug",

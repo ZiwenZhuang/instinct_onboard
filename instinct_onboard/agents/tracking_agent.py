@@ -159,7 +159,7 @@ class TrackerAgent(OnboardAgent):
         ) * quaternion.from_float_array(future_motion_base_quat)
         return quat_to_tan_norm_batch(future_motion_base_quat_b)  # (num_frames, 6)
 
-    def get_cold_start_agent(self, startup_step_size: float = 0.2) -> ColdStartAgent:
+    def get_cold_start_agent(self, startup_step_size: float = 0.2, kpkd_factor: float = 1.0) -> ColdStartAgent:
         """Create a ColdStartAgent with joint_target_pos set to the 0-th frame of the motion."""
         joint_target_pos = self.motion_joint_pos[0].copy()
         return ColdStartAgent(
@@ -168,6 +168,6 @@ class TrackerAgent(OnboardAgent):
             joint_target_pos=joint_target_pos,
             action_scale=self.action_offset,  # Note: passing action_offset here sets _action_offset in ColdStartAgent due to parameter naming in init
             action_offset=self.action_scale,  # passing action_scale here sets _action_scale
-            p_gains=self.p_gains,
-            d_gains=self.d_gains,
+            p_gains=self.p_gains * kpkd_factor,
+            d_gains=self.d_gains * kpkd_factor,
         )
