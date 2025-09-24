@@ -29,6 +29,7 @@ class ParkourAgent(OnboardAgent):
         ros_node: Ros2Real,
     ):
         super().__init__(logdir, ros_node)
+        assert cv2.cuda.getCudaEnabledDeviceCount() > 0, "ParkourAgent requires a CUDA-enabled OpenCV installation."
         self.ort_sessions = dict()
         self.lin_vel_deadband = 0.15
         self.ang_vel_deadband = 0.15
@@ -195,6 +196,9 @@ class ParkourAgent(OnboardAgent):
             # start_get = time.time()
             depth_image_np = np.asanyarray(depth_frame.get_data(), dtype=np.float32) * self.depth_scale
             depth_image = depth_image_np[self.y_valid, self.x_valid]
+
+            mask = (depth_image < 0.05).astype(np.uint8)
+            depth_image = cv2.inpaint(depth_image, mask, 3, cv2.INPAINT_NS)
 
             if hasattr(self, "blind_spot_crop"):
                 shape = depth_image.shape

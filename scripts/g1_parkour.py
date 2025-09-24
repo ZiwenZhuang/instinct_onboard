@@ -129,6 +129,8 @@ if __name__ == "__main__":
     )
 
     args = parser.parse_args()
+    if not args.nodryrun:
+        args.dof_max_err = 1e10
 
     if args.debug:
         # import typing; typing.TYPE_CHECKING = True
