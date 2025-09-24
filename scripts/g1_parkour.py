@@ -26,14 +26,9 @@ class G1ParkourNode(ParkourNode):
 
     def main_loop_callback(self):
         if self.current_agent_name is None:
-            # waiting for depth latent to arrive
-            if self.depth_latent_buffer is not None:
-                self.get_logger().info("Depth latent received, switching to cold_start agent.")
-                self.current_agent_name = "cold_start"
-                self.available_agents[self.current_agent_name].reset()
-            else:
-                self.get_logger().info("Waiting for depth latent...", throttle_duration_sec=5.0)
-                return
+            self.get_logger().info("Start cold_start agent.")
+            self.current_agent_name = "cold_start"
+            self.available_agents[self.current_agent_name].reset()
         elif self.current_agent_name == "cold_start":
             action, done = self.available_agents[self.current_agent_name].step()
             if done:
@@ -111,13 +106,13 @@ if __name__ == "__main__":
     parser.add_argument(
         "--dof_max_err",
         type=float,
-        default=0.1,
+        default=0.25,
         help="Max dof error in start up (default: 0.01)",
     )
     parser.add_argument(
         "--start_steps",
         type=int,
-        default=50,
+        default=100,
         help="Startup step size for the agent (default: 50)",
     )
     parser.add_argument(
