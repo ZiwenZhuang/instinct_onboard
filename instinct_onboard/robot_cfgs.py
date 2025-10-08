@@ -22,7 +22,7 @@ class WirelessButtons:
     left = 0b1000000000000000  # 32768
 
 
-class G1_29Dof:
+class g1:
     NUM_JOINTS = 29
     NUM_ACTIONS = 29
     joint_map = [
@@ -261,3 +261,105 @@ class G1_29Dof:
         https://support.unitree.com/home/zh/G1_developer/basic_services_interface
         https://github.com/unitreerobotics/unitree_ros/tree/master/robots/g1_description
     """
+
+
+class Go2:
+    NUM_JOINTS = 12
+    NUM_ACTIONS = 12
+    joint_map = [
+        3,
+        0,
+        9,
+        6,
+        4,
+        1,
+        10,
+        7,
+        5,
+        2,
+        11,
+        8,
+    ]
+    sim_joint_names = [  # NOTE: order matters. This list is the order in simulation.
+        "FL_hip_joint",
+        "FL_thigh_joint",
+        "FL_calf_joint",
+        "FR_hip_joint",
+        "FR_thigh_joint",
+        "FR_calf_joint",
+        "RL_hip_joint",
+        "RL_thigh_joint",
+        "RL_calf_joint",
+        "RR_hip_joint",
+        "RR_thigh_joint",
+        "RR_calf_joint",
+    ]
+    real_joint_names = [  # NOTE: order matters. This list is the order in real robot.
+        "FR_hip_joint",
+        "FR_thigh_joint",
+        "FR_calf_joint",
+        "FL_hip_joint",
+        "FL_thigh_joint",
+        "FL_calf_joint",
+        "RR_hip_joint",
+        "RR_thigh_joint",
+        "RR_calf_joint",
+        "RL_hip_joint",
+        "RL_thigh_joint",
+        "RL_calf_joint",
+    ]
+    joint_signs = [1.0] * 12
+    joint_limits_high = np.array(
+        [
+            1.0472,
+            3.4907,
+            -0.83776,
+            1.0472,
+            3.4907,
+            -0.83776,
+            1.0472,
+            4.5379,
+            -0.83776,
+            1.0472,
+            4.5379,
+            -0.83776,
+        ],
+        dtype=np.float32,
+    )
+    joint_limits_low = np.array(
+        [
+            -1.0472,
+            -1.5708,
+            -2.7227,
+            -1.0472,
+            -1.5708,
+            -2.7227,
+            -1.0472,
+            -0.5236,
+            -2.7227,
+            -1.0472,
+            -0.5236,
+            -2.7227,
+        ],
+        dtype=np.float32,
+    )
+    torque_limits = np.array(
+        [  # from urdf and in simulation order
+            23.7,
+            23.7,
+            45.43,
+            23.7,
+            23.7,
+            45.43,
+            23.7,
+            23.7,
+            45.43,
+            23.7,
+            23.7,
+            45.43,
+        ],
+        dtype=np.float32,
+    )
+    turn_on_motor_mode = [0x01] * 12
+    mode_pr = 0
+    mode_machine = 5
