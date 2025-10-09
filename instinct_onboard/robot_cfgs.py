@@ -266,20 +266,7 @@ class g1:
 class Go2:
     NUM_JOINTS = 12
     NUM_ACTIONS = 12
-    joint_map = [
-        3,
-        0,
-        9,
-        6,
-        4,
-        1,
-        10,
-        7,
-        5,
-        2,
-        11,
-        8,
-    ]
+    joint_map = [3, 4, 5, 0, 1, 2, 9, 10, 11, 6, 7, 8]  # FL hip joint  # FR hip joint  # RL hip joint  # RR hip joint
     sim_joint_names = [  # NOTE: order matters. This list is the order in simulation.
         "FL_hip_joint",
         "FL_thigh_joint",
@@ -361,5 +348,3 @@ class Go2:
         dtype=np.float32,
     )
     turn_on_motor_mode = [0x01] * 12
-    mode_pr = 0
-    mode_machine = 5
