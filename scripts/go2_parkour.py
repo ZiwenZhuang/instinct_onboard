@@ -3,8 +3,10 @@ import sys
 import rclpy
 
 import instinct_onboard.robot_cfgs as robot_cfgs
-from instinct_onboard.agents.base import OnboardAgent
-from instinct_onboard.agents.parkour_agent import ParkourAgent, ParkourColdStartAgent
+from instinct_onboard.agents.base import ColdStartAgent, OnboardAgent
+
+# from instinct_onboard.agents.parkour_agent import ParkourAgent, ParkourColdStartAgent
+from instinct_onboard.agents.parkour_agent import ParkourAgent
 from instinct_onboard.ros_nodes.parkour import ParkourNode
 
 
@@ -33,8 +35,13 @@ class Go2ParkourNode(ParkourNode):
             action, done = self.available_agents[self.current_agent_name].step()
             if done:
                 self.get_logger().info("ColdStartAgent done.", throttle_duration_sec=5.0)
-                self.current_agent_name = "parkour"
-                self.available_agents[self.current_agent_name].reset()
+                if self.joy_stick_buffer.keys & robot_cfgs.WirelessButtons.L1:
+                    self.current_agent_name = "parkour"
+                    self.available_agents[self.current_agent_name].reset()
+            # self.get_logger().info("Start parkour agent.")
+            # self.current_agent_name = "parkour"
+            self.available_agents[self.current_agent_name].reset()
+
             self.send_action(
                 action,
                 self.available_agents[self.current_agent_name].action_offset,
@@ -64,7 +71,7 @@ class Go2ParkourNode(ParkourNode):
 def main(args):
     rclpy.init()
 
-    node = Go2ParkourNode(dryrun=not args.nodryrun, robot_class_name="Go2")
+    node = Go2ParkourNode(dryrun=not args.nodryrun, robot_class_name="Go2", imu_state_topic=None)
 
     parkour_agent = ParkourAgent(
         logdir=args.logdir,
@@ -72,11 +79,20 @@ def main(args):
     )
     node.register_agent("parkour", parkour_agent)
 
-    cold_start_agent = ParkourColdStartAgent(
-        logdir=args.logdir,
-        dof_max_err=args.dof_max_err,
-        start_steps=args.start_steps,
+    # cold_start_agent = ParkourColdStartAgent(
+    #     logdir=args.logdir,
+    #     dof_max_err=args.dof_max_err,
+    #     start_steps=args.start_steps,
+    #     ros_node=node,
+    # )
+    cold_start_agent = ColdStartAgent(
+        startup_step_size=1.5,
         ros_node=node,
+        joint_target_pos=parkour_agent.action_offset,
+        action_scale=parkour_agent.action_scale,
+        action_offset=parkour_agent.action_offset,
+        p_gains=parkour_agent.p_gains,
+        d_gains=parkour_agent.d_gains,
     )
     node.register_agent("cold_start", cold_start_agent)
 
