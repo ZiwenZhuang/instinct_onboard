@@ -65,16 +65,16 @@ class ParkourDogAgent(OnboardAgent):
         print("Observation functions:")
         print(table)
 
-    def _parse_action_config(self):
-        super()._parse_action_config()
-        self._zero_action_joints = np.zeros(self.ros_node.NUM_ACTIONS, dtype=np.float32)
-        for action_names, action_config in self.cfg["actions"].items():
-            for i in range(self.ros_node.NUM_JOINTS):
-                name = self.ros_node.sim_joint_names[i]
-                if "default_joint_names" in action_config:
-                    for _, joint_name_expr in enumerate(action_config["default_joint_names"]):
-                        if re.search(joint_name_expr, name):
-                            self._zero_action_joints[i] = 1.0
+    # def _parse_action_config(self):
+    #     super()._parse_action_config()
+    #     self._zero_action_joints = np.zeros(self.ros_node.NUM_ACTIONS, dtype=np.float32)
+    #     for action_names, action_config in self.cfg["actions"].items():
+    #         for i in range(self.ros_node.NUM_JOINTS):
+    #             name = self.ros_node.sim_joint_names[i]
+    #             if "default_joint_names" in action_config:
+    #                 for _, joint_name_expr in enumerate(action_config["default_joint_names"]):
+    #                     if re.search(joint_name_expr, name):
+    #                         self._zero_action_joints[i] = 1.0
 
     def _parse_depth_image_config(self):
         self.output_resolution = [
@@ -247,13 +247,13 @@ class ParkourDogAgent(OnboardAgent):
         action = self.ort_sessions["actor"].run(None, {actor_input_name: actor_input})[0]
         action = action.reshape(-1)
         # reconstruct full action including zeroed joints
-        mask = (self._zero_action_joints == 0).astype(bool)
-        full_action = np.zeros(self.ros_node.NUM_ACTIONS, dtype=np.float32)
-        full_action[mask] = action
+        # mask = (self._zero_action_joints == 0).astype(bool)
+        # full_action = np.zeros(self.ros_node.NUM_ACTIONS, dtype=np.float32)
+        # full_action[mask] = action
 
         done = False
 
-        return full_action, done
+        return action, done
 
     """
     Agent specific observation functions for Parkour Agent.
@@ -305,15 +305,12 @@ class ParkourDogAgent(OnboardAgent):
         """Return shape: (num_joints,)"""
         return self.ros_node.joint_vel_
 
-    def _get_depth_latent_obs(self):
-        """Return shape: (depth_latent_dim,)"""
-        return self.ros_node.depth_latent_buffer
-
     def _get_last_action_obs(self):
         """Return shape: (num_active_joints,)"""
         actions = np.asarray(self.ros_node.actions).astype(np.float32)
-        mask = (1.0 - self._zero_action_joints).astype(bool)
-        return actions[mask]
+        # mask = (1.0 - self._zero_action_joints).astype(bool)
+        return actions
+        # return actions[mask]
 
     def _get_depth_image_downsample_obs(self):
         """Return shape: (num_active_joints,)"""
