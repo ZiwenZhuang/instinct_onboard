@@ -6,7 +6,7 @@ import instinct_onboard.robot_cfgs as robot_cfgs
 from instinct_onboard.agents.base import ColdStartAgent, OnboardAgent
 
 # from instinct_onboard.agents.parkour_agent import ParkourAgent, ParkourColdStartAgent
-from instinct_onboard.agents.parkour_agent import ParkourAgent
+from instinct_onboard.agents.parkour_dog_agent import ParkourDogAgent
 from instinct_onboard.ros_nodes.parkour import ParkourNode
 
 
@@ -73,7 +73,7 @@ def main(args):
 
     node = Go2ParkourNode(dryrun=not args.nodryrun, robot_class_name="Go2", imu_state_topic=None)
 
-    parkour_agent = ParkourAgent(
+    parkour_agent = ParkourDogAgent(
         logdir=args.logdir,
         ros_node=node,
     )
