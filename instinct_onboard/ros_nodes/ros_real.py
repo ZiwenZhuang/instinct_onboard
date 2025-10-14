@@ -5,10 +5,16 @@ import rclpy
 from rclpy.node import Node
 from std_msgs.msg import Float32MultiArray
 from unitree_go.msg import WirelessController
-from unitree_hg.msg import IMUState, LowCmd, LowState  # MotorState,; MotorCmd,
+
+try:
+    from unitree_hg.msg import IMUState, LowCmd, LowState  # MotorState,; MotorCmd,
+except ImportError:
+    print("Cannot find unitree_hg package for ros messages, falling back to unitree_go message definitions.")
+    from unitree_go.msg import IMUState, LowCmd, LowState  # MotorState,; MotorCmd,
+
+from crc_module import get_crc
 
 import instinct_onboard.robot_cfgs as robot_cfgs
-from crc_module import get_crc
 from instinct_onboard import utils
 
 
@@ -56,8 +62,7 @@ class Ros2Real(Node):
         self.real_joint_names = getattr(robot_cfgs, robot_class_name).real_joint_names
         self.joint_signs = getattr(robot_cfgs, robot_class_name).joint_signs
         self.turn_on_motor_mode = getattr(robot_cfgs, robot_class_name).turn_on_motor_mode
-        self.mode_pr = getattr(robot_cfgs, robot_class_name).mode_pr
-
+        # self.mode_pr = getattr(robot_cfgs, robot_class_name).mode_pr
         self.parse_config()
 
     def parse_config(self):
@@ -92,15 +97,16 @@ class Ros2Real(Node):
         self.action_publisher = self.create_publisher(Float32MultiArray, "/raw_actions", 10)
         self.low_cmd_publisher = self.create_publisher(LowCmd, self.low_cmd_topic, 10)
         self.low_cmd_buffer = LowCmd()
-        self.low_cmd_buffer.mode_pr = self.mode_pr
+        # self.low_cmd_buffer.mode_pr = self.mode_pr
 
         # ROS subscribers
         self.low_state_subscriber = self.create_subscription(
             LowState, self.low_state_topic, self._low_state_callback, 10
         )
-        self.torso_imu_subscriber = self.create_subscription(
-            IMUState, self.imu_state_topic, self._torso_imu_state_callback, 10
-        )
+        if not self.imu_state_topic is None:
+            self.torso_imu_subscriber = self.create_subscription(
+                IMUState, self.imu_state_topic, self._torso_imu_state_callback, 10
+            )
         self.joy_stick_subscriber = self.create_subscription(
             WirelessController, self.joy_stick_topic, self._joy_stick_callback, 10
         )
@@ -138,7 +144,7 @@ class Ros2Real(Node):
         """store and handle proprioception data"""
         self.get_logger().info("Low state data received.", once=True)
         self.low_state_buffer = msg  # keep the latest low state
-        self.low_cmd_buffer.mode_machine = msg.mode_machine
+        # self.low_cmd_buffer.mode_machine = msg.mode_machine
 
         # refresh joint_pos and joint_vel
         for sim_idx in range(self.NUM_JOINTS):
