@@ -1,10 +1,15 @@
 import sys
+import time
 
 import rclpy
 
 import instinct_onboard.robot_cfgs as robot_cfgs
 from instinct_onboard.agents.base import OnboardAgent
-from instinct_onboard.agents.parkour_agent import ParkourAgent, ParkourColdStartAgent
+from instinct_onboard.agents.parkour_agent import (
+    ParkourAgent,
+    ParkourColdStartAgent,
+    ParkourStandAgent,
+)
 from instinct_onboard.ros_nodes.parkour import ParkourNode
 
 
@@ -13,6 +18,7 @@ class G1ParkourNode(ParkourNode):
         super().__init__(*args, **kwargs)
         self.available_agents = dict()
         self.current_agent_name: str | None = None
+        self.stand_start_flag = False
         self.parkour_start_flag = False
 
     def register_agent(self, name: str, agent: OnboardAgent):
@@ -33,8 +39,11 @@ class G1ParkourNode(ParkourNode):
             action, done = self.available_agents[self.current_agent_name].step()
             if done:
                 self.get_logger().info("ColdStartAgent done.", throttle_duration_sec=5.0)
-                self.current_agent_name = "parkour"
+                self.current_agent_name = "stand"
                 self.available_agents[self.current_agent_name].reset()
+                self.available_agents["parkour"].reset()
+                self.available_agents[self.current_agent_name].step()
+                self.available_agents["parkour"].step()
             self.send_action(
                 action,
                 self.available_agents[self.current_agent_name].action_offset,
@@ -42,15 +51,25 @@ class G1ParkourNode(ParkourNode):
                 self.available_agents[self.current_agent_name].p_gains,
                 self.available_agents[self.current_agent_name].d_gains,
             )
-        elif self.current_agent_name == "parkour":
-            action, done = self.available_agents[self.current_agent_name].step()
+        elif self.current_agent_name == "stand":
+
+            if self.parkour_start_flag:
+                action, done = self.available_agents["parkour"].step()
+            else:
+                action, done = self.available_agents[self.current_agent_name].step()
+
             if done:
-                self.get_logger().info("ParkourAgent done.", throttle_duration_sec=5.0)
-            if not self.parkour_start_flag:
-                self.get_logger().info("Cold start finished. Please press R1 to switch to parkour policy.", once=True)
+                self.get_logger().info("StandAgent done.", throttle_duration_sec=5.0)
+            if not self.stand_start_flag:
+                self.get_logger().info("Cold start finished. Please press R1 to switch to stand policy.", once=True)
                 action *= 0.0
                 if self.joy_stick_buffer.keys & robot_cfgs.WirelessButtons.R1:
                     self.get_logger().info("R1 pressed, stop using cold start agent", once=True)
+                    self.get_logger().info("Stand Finish. Please press L1 to switch to parkour policy.", once=True)
+                    self.stand_start_flag = True
+            if not self.parkour_start_flag:
+                if self.joy_stick_buffer.keys & robot_cfgs.WirelessButtons.L1:
+                    self.get_logger().info("L1 pressed, start parkour agent", once=True)
                     self.parkour_start_flag = True
             self.send_action(
                 action,
@@ -67,6 +86,12 @@ def main(args):
     node = G1ParkourNode(
         dryrun=not args.nodryrun,
     )
+
+    stand_agent = ParkourStandAgent(
+        logdir=args.standdir,
+        ros_node=node,
+    )
+    node.register_agent("stand", stand_agent)
 
     parkour_agent = ParkourAgent(
         logdir=args.logdir,
@@ -99,14 +124,19 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description="G1 Parkour Node")
     parser.add_argument(
+        "--standdir",
+        type=str,
+        help="Directory to load the stand agent from",
+    )
+    parser.add_argument(
         "--logdir",
         type=str,
-        help="Directory to load the agent from",
+        help="Directory to load the parkour agent from",
     )
     parser.add_argument(
         "--dof_max_err",
         type=float,
-        default=0.25,
+        default=0.3,
         help="Max dof error in start up (default: 0.01)",
     )
     parser.add_argument(

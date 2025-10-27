@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import multiprocessing as mp
 import os
 import re
 import threading
@@ -11,17 +12,89 @@ import numpy as np
 import onnxruntime as ort
 import prettytable
 import pyrealsense2 as rs
+import ros2_numpy as rnp
 import yaml
+from sensor_msgs.msg import CameraInfo, Image
 
 from instinct_onboard.agents.base import OnboardAgent
 from instinct_onboard.ros_nodes.ros_real import Ros2Real
 from instinct_onboard.utils import CircularBuffer
 
 
+def depth_worker(queue, config):
+    rs_pipeline = rs.pipeline()
+    rs_config = rs.config()
+    rs_config.enable_stream(
+        rs.stream.depth,
+        config["rs_resolution"][0],
+        config["rs_resolution"][1],
+        rs.format.z16,
+        config["rs_frequency"],
+    )
+    rs_profile = rs_pipeline.start(rs_config)
+    depth_scale = rs_profile.get_device().first_depth_sensor().get_depth_scale()
+    depth_image_buffer = CircularBuffer(length=config["rs_frequency"])
+
+    while True:
+        # print("Current time:", time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()))
+        # read from pyrealsense2, preprocess and write the model latent to the buffer
+        rs_frame = rs_pipeline.wait_for_frames()  # ms
+        # frame_timestamp = rs_frame.get_timestamp()
+        depth_frame = rs_frame.get_depth_frame()
+        # current_time_ms = int(time.time() * 1000)
+        # print("RealSense frame retrieval time: {:.4f} ms, current time: {} ms.".format(frame_timestamp, current_time_ms))
+        if not depth_frame:
+            raise RuntimeError("No depth frame")
+        # start_get = time.time()
+        depth_image_np = np.asanyarray(depth_frame.get_data(), dtype=np.float32) * depth_scale
+        # depth_input_msg = rnp.msgify(Image, np.asanyarray(depth_image_np/self.depth_scale, dtype=np.uint16), encoding="16UC1")
+
+        depth_image = cv2.resize(depth_image_np, config["output_resolution"], interpolation=cv2.INTER_NEAREST)
+
+        if "crop_region" in config:
+            shape = depth_image.shape
+            x1, x2, y1, y2 = config["crop_region"]
+            depth_image = depth_image[x1 : shape[0] - x2, y1 : shape[1] - y2]
+
+        mask = (depth_image < 0.2).astype(np.uint8)
+        depth_image = cv2.inpaint(depth_image, mask, 3, cv2.INPAINT_NS)
+
+        if "blind_spot_crop" in config:
+            shape = depth_image.shape
+            x1, x2, y1, y2 = config["blind_spot_crop"]
+            depth_image[:x1, :] = 0
+            depth_image[shape[0] - x2 :, :] = 0
+            depth_image[:, :y1] = 0
+            depth_image[:, shape[1] - y2 :] = 0
+        if "gaussian_kernel_size" in config:
+            depth_image = cv2.GaussianBlur(
+                depth_image, config["gaussian_kernel_size"], config["gaussian_sigma"], config["gaussian_sigma"]
+            )
+
+        filt_m = np.clip(depth_image, config["depth_range"][0], config["depth_range"][1])
+        filt_norm = (filt_m - config["depth_range"][0]) / (config["depth_range"][1] - config["depth_range"][0])
+
+        output_norm = (
+            filt_norm * (config["depth_output_range"][1] - config["depth_output_range"][0])
+            + config["depth_output_range"][0]
+        )
+        # depth_image = depth_image_np[self.y_valid, self.x_valid]
+        # publish the depth image input to ros topic
+        depth_image_buffer.append(output_norm)
+        if queue.full():
+            try:
+                queue.get_nowait()
+            except:
+                pass
+        queue.put(depth_image_buffer)
+        # print("Depth processing time: {:.4f} ms.".format((time.time() - start_get) * 1000))
+
+
 class ParkourAgent(OnboardAgent):
     rs_resolution = (480, 270)
     rs_frequency = 60
     visualize_depth = False
+    publish_depth = True
 
     def __init__(
         self,
@@ -33,10 +106,10 @@ class ParkourAgent(OnboardAgent):
         self.ort_sessions = dict()
         self.lin_vel_deadband = 0.15
         self.ang_vel_deadband = 0.15
-        self.cmd_px_range = [0.0, 1.0]
+        self.cmd_px_range = [0.0, 0.8]
         self.cmd_nx_range = [0.0, 0.0]
-        self.cmd_py_range = [0.0, 0.3]
-        self.cmd_ny_range = [0.0, 0.3]
+        self.cmd_py_range = [0.0, 0.0]
+        self.cmd_ny_range = [0.0, 0.0]
         self.cmd_pyaw_range = [0.0, 1.0]
         self.cmd_nyaw_range = [0.0, 1.0]
         self.move_by_wireless_remote = True
@@ -45,8 +118,14 @@ class ParkourAgent(OnboardAgent):
         self._parse_depth_image_config()
         self._load_models()
         self._start_rs_pipeline()
-        self._depth_thread = threading.Thread(target=self.get_depth_frame, daemon=True)
-        self._depth_thread.start()
+        # self._depth_thread = threading.Thread(target=self.get_depth_frame, daemon=True)
+        # self._depth_thread.start()
+
+        self.depth_input_pub = self.ros_node.create_publisher(
+            Image,
+            "/depth_image",
+            1,
+        )
 
     def _parse_obs_config(self):
         super()._parse_obs_config()
@@ -77,27 +156,52 @@ class ParkourAgent(OnboardAgent):
                             self._zero_action_joints[i] = 1.0
 
     def _parse_depth_image_config(self):
+        self.depth_configs = {}
         self.output_resolution = [
             self.cfg["scene"]["camera"]["pattern_cfg"]["width"],
             self.cfg["scene"]["camera"]["pattern_cfg"]["height"],
         ]
-        self.depth_width = self.output_resolution[0]
-        self.depth_height = self.output_resolution[1]
+        self.depth_configs["output_resolution"] = self.output_resolution
+
         self.depth_range = self.cfg["scene"]["camera"]["noise_pipeline"]["depth_normalization"]["depth_range"]
+        self.depth_configs["depth_range"] = self.depth_range
+
         if self.cfg["scene"]["camera"]["noise_pipeline"]["depth_normalization"]["normalize"]:
             self.depth_output_range = self.cfg["scene"]["camera"]["noise_pipeline"]["depth_normalization"][
                 "output_range"
             ]
         else:
             self.depth_output_range = self.depth_range
+        self.depth_configs["depth_output_range"] = self.depth_output_range
+
+        if "crop_and_resize" in self.cfg["scene"]["camera"]["noise_pipeline"]:
+            self.crop_region = self.cfg["scene"]["camera"]["noise_pipeline"]["crop_and_resize"]["crop_region"]
+            self.depth_configs["crop_region"] = self.crop_region
         if "gaussian_blur" in self.cfg["scene"]["camera"]["noise_pipeline"]:
             self.gaussian_kernel_size = (
                 self.cfg["scene"]["camera"]["noise_pipeline"]["gaussian_blur"]["kernel_size"],
                 self.cfg["scene"]["camera"]["noise_pipeline"]["gaussian_blur"]["kernel_size"],
             )
             self.gaussian_sigma = self.cfg["scene"]["camera"]["noise_pipeline"]["gaussian_blur"]["sigma"]
+            self.depth_configs["gaussian_kernel_size"] = self.gaussian_kernel_size
+            self.depth_configs["gaussian_sigma"] = self.gaussian_sigma
         if "blind_spot" in self.cfg["scene"]["camera"]["noise_pipeline"]:
             self.blind_spot_crop = self.cfg["scene"]["camera"]["noise_pipeline"]["blind_spot"]["crop_region"]
+            self.depth_configs["blind_spot_crop"] = self.blind_spot_crop
+        self.depth_width = (
+            self.output_resolution[0] - self.crop_region[2] - self.crop_region[3]
+            if hasattr(self, "crop_region")
+            else self.output_resolution[0]
+        )
+        self.depth_height = (
+            self.output_resolution[1] - self.crop_region[0] - self.crop_region[1]
+            if hasattr(self, "crop_region")
+            else self.output_resolution[1]
+        )
+        self.depth_configs["depth_width"] = self.depth_width
+        self.depth_configs["depth_height"] = self.depth_height
+        self.depth_configs["rs_frequency"] = self.rs_frequency
+        self.depth_configs["rs_resolution"] = self.rs_resolution
         # For sample resize
         square_size = int(self.rs_resolution[0] // self.output_resolution[0])
         rows, cols = self.rs_resolution[1], self.rs_resolution[0]
@@ -142,99 +246,85 @@ class ParkourAgent(OnboardAgent):
 
     def _start_rs_pipeline(self):
         """Start the RealSense camera pipeline."""
-        self.rs_pipeline = rs.pipeline()
-        rs_config = rs.config()
-        rs_config.enable_stream(
-            rs.stream.depth,
-            self.rs_resolution[0],
-            self.rs_resolution[1],
-            rs.format.z16,
-            self.rs_frequency,
-        )
-        self.rs_profile = self.rs_pipeline.start(rs_config)
-        rs_depth_to_disparity_filter = rs.disparity_transform(True)
-        rs_hole_filling_filter = rs.hole_filling_filter(
-            1
-        )  # 0: fill from left; 1: farthest from around; 2: nearest from around
-        rs_spatial_filter = rs.spatial_filter()
-        rs_spatial_filter.set_option(rs.option.filter_magnitude, 5)
-        rs_spatial_filter.set_option(rs.option.filter_smooth_alpha, 0.75)
-        rs_spatial_filter.set_option(rs.option.filter_smooth_delta, 1)
-        rs_spatial_filter.set_option(rs.option.holes_fill, 4)
-        rs_temporal_filter = rs.temporal_filter()
-        rs_temporal_filter.set_option(rs.option.filter_smooth_alpha, 0.6)
-        rs_temporal_filter.set_option(rs.option.filter_smooth_delta, 20)
-        rs_diaparity_to_depth_filter = rs.disparity_transform(False)
-        # using a list of filters to define the filtering order
-        self.rs_filters = [
-            # rs_decimation_filter,
-            rs_depth_to_disparity_filter,
-            rs_hole_filling_filter,
-            rs_spatial_filter,
-            rs_temporal_filter,
-            rs_diaparity_to_depth_filter,
-        ]
-        self.depth_scale = self.rs_profile.get_device().first_depth_sensor().get_depth_scale()
+        self.depth_queue = mp.Queue(maxsize=1)
+        self.depth_proc = mp.Process(target=depth_worker, args=(self.depth_queue, self.depth_configs), daemon=True)
+        self.depth_proc.start()
 
-    def get_depth_frame(self):
-        while True:
-            # print("Current time:", time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()))
-            # read from pyrealsense2, preprocess and write the model latent to the buffer
-            rs_frame = self.rs_pipeline.wait_for_frames()  # ms
-            # frame_timestamp = rs_frame.get_timestamp()
-            depth_frame = rs_frame.get_depth_frame()
-            # current_time_ms = int(time.time() * 1000)
-            # print("RealSense frame retrieval time: {:.4f} ms, current time: {} ms.".format(frame_timestamp, current_time_ms))
-            if not depth_frame:
-                self.ros_node.get_logger().error("No depth frame", throttle_duration_sec=1)
-                return
-            # apply relsense filters
-            # start_filter = time.time()
-            # for rs_filter in self.rs_filters:
-            #     depth_frame = rs_filter.process(depth_frame)
-            # filter_time = time.time() - start_filter
-            # start_get = time.time()
-            depth_image_np = np.asanyarray(depth_frame.get_data(), dtype=np.float32) * self.depth_scale
-            depth_image = depth_image_np[self.y_valid, self.x_valid]
+    # def get_depth_frame(self):
+    #     while True:
+    #         # print("Current time:", time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()))
+    #         # read from pyrealsense2, preprocess and write the model latent to the buffer
+    #         rs_frame = self.rs_pipeline.wait_for_frames()  # ms
+    #         # frame_timestamp = rs_frame.get_timestamp()
+    #         depth_frame = rs_frame.get_depth_frame()
+    #         # current_time_ms = int(time.time() * 1000)
+    #         # print("RealSense frame retrieval time: {:.4f} ms, current time: {} ms.".format(frame_timestamp, current_time_ms))
+    #         if not depth_frame:
+    #             self.ros_node.get_logger().error("No depth frame", throttle_duration_sec=1)
+    #             return
+    #         # apply relsense filters
+    #         # start_filter = time.time()
+    #         # for rs_filter in self.rs_filters:
+    #         #     depth_frame = rs_filter.process(depth_frame)
+    #         # filter_time = time.time() - start_filter
+    #         # start_get = time.time()
+    #         depth_image_np = np.asanyarray(depth_frame.get_data(), dtype=np.float32) * self.depth_scale
+    #         # depth_input_msg = rnp.msgify(Image, np.asanyarray(depth_image_np/self.depth_scale, dtype=np.uint16), encoding="16UC1")
 
-            mask = (depth_image < 0.05).astype(np.uint8)
-            depth_image = cv2.inpaint(depth_image, mask, 3, cv2.INPAINT_NS)
+    #         depth_image = cv2.resize(depth_image_np, self.output_resolution, interpolation=cv2.INTER_NEAREST)
+    #         # depth_image = depth_image_np[self.y_valid, self.x_valid]
 
-            if hasattr(self, "blind_spot_crop"):
-                shape = depth_image.shape
-                x1, x2, y1, y2 = self.blind_spot_crop
-                depth_image[:x1, :] = 0
-                depth_image[shape[0] - x2 :, :] = 0
-                depth_image[:, :y1] = 0
-                depth_image[:, shape[1] - y2 :] = 0
-            if hasattr(self, "gaussian_kernel_size"):
-                depth_image = cv2.GaussianBlur(
-                    depth_image, self.gaussian_kernel_size, self.gaussian_sigma, self.gaussian_sigma
-                )
+    #         if self.visualize_depth:
+    #             # display normalized depth as 8-bit for visualization
+    #             vis = (depth_image/2.5 * 255).astype(np.uint8)
+    #             filename = f"depth.png"
+    #             cv2.imwrite(filename, vis)
+    #             # cv2.imshow("Depth Image", vis)
 
-            filt_m = np.clip(depth_image, self.depth_range[0], self.depth_range[1])
-            filt_norm = (filt_m - self.depth_range[0]) / (self.depth_range[1] - self.depth_range[0])
+    #         if hasattr(self, "crop_region"):
+    #             shape = depth_image.shape
+    #             x1, x2, y1, y2 = self.crop_region
+    #             depth_image = depth_image[x1 : shape[0] - x2, y1 : shape[1] - y2]
 
-            if self.visualize_depth:
-                # display normalized depth as 8-bit for visualization
-                vis = (filt_norm * 255).astype(np.uint8)
-                filename = f"depth.png"
-                cv2.imwrite(filename, vis)
+    #         mask = (depth_image < 0.2).astype(np.uint8)
+    #         depth_image = cv2.inpaint(depth_image, mask, 3, cv2.INPAINT_NS)
 
-            output_norm = (
-                filt_norm * (self.depth_output_range[1] - self.depth_output_range[0]) + self.depth_output_range[0]
-            )
+    #         if hasattr(self, "blind_spot_crop"):
+    #             shape = depth_image.shape
+    #             x1, x2, y1, y2 = self.blind_spot_crop
+    #             depth_image[:x1, :] = 0
+    #             depth_image[shape[0] - x2 :, :] = 0
+    #             depth_image[:, :y1] = 0
+    #             depth_image[:, shape[1] - y2 :] = 0
+    #         if hasattr(self, "gaussian_kernel_size"):
+    #             depth_image = cv2.GaussianBlur(
+    #                 depth_image, self.gaussian_kernel_size, self.gaussian_sigma, self.gaussian_sigma
+    #             )
 
-            # publish the depth image input to ros topic
-            self.ros_node.get_logger().info("depth range: {}-{}".format(*self.depth_range), once=True)
-            self.depth_image_buffer.append(output_norm)
-            # print("Depth processing time: {:.4f} ms.".format((time.time() - start_get) * 1000))
+    #         if self.publish_depth:
+    #             depth_input_msg = rnp.msgify(Image, np.asanyarray(depth_image/self.depth_scale, dtype=np.uint16), encoding="16UC1")
+    #             depth_input_msg.header.stamp = self.ros_node.get_clock().now().to_msg()
+    #             depth_input_msg.header.frame_id = "d435_depth_link"
+    #             self.depth_input_pub.publish(depth_input_msg)
+
+    #         filt_m = np.clip(depth_image, self.depth_range[0], self.depth_range[1])
+    #         filt_norm = (filt_m - self.depth_range[0]) / (self.depth_range[1] - self.depth_range[0])
+
+    #         output_norm = (
+    #             filt_norm * (self.depth_output_range[1] - self.depth_output_range[0]) + self.depth_output_range[0]
+    #         )
+
+    #         # publish the depth image input to ros topic
+    #         self.ros_node.get_logger().info("depth range: {}-{}".format(*self.depth_range), once=True)
+    #         self.depth_image_buffer.append(output_norm)
+    #         # print("Depth processing time: {:.4f} ms.".format((time.time() - start_get) * 1000))
 
     def reset(self):
         """Reset the agent state and the rosbag reader."""
         pass
 
     def step(self):
+        # cur_time=time.time()
         """Perform a single step of the agent."""
         # pack actor MLP input
         proprio_obs = []
@@ -248,6 +338,9 @@ class ParkourAgent(OnboardAgent):
             .reshape(1, -1, self.depth_height, self.depth_width)
             .astype(np.float32)
         )
+        if self.visualize_depth:
+            self._vis_depth_obs(depth_obs.reshape(-1, self.depth_height, self.depth_width))
+
         # depth_obs*=0.
         depth_image_output = self.ort_sessions["depth_encoder"].run(
             None, {self.ort_sessions["depth_encoder"].get_inputs()[0].name: depth_obs}
@@ -263,6 +356,7 @@ class ParkourAgent(OnboardAgent):
         full_action[mask] = action
 
         done = False
+        # print(time.time()-cur_time)
 
         return full_action, done
 
@@ -328,8 +422,28 @@ class ParkourAgent(OnboardAgent):
 
     def _get_depth_image_downsample_obs(self):
         """Return shape: (num_active_joints,)"""
-        depth_images = self.depth_image_buffer.buffer
-        return depth_images[self.depth_obs_indices, ...]
+        if not hasattr(self, "depth_queue"):
+            return np.zeros((len(self.depth_obs_indices), self.depth_height, self.depth_width), dtype=np.float32)
+        try:
+            while True:
+                depth_images = self.depth_queue.get_nowait().buffer
+                self._last_depth_images = depth_images
+        except:
+            pass
+
+        if self._last_depth_images is None:
+            return np.zeros((len(self.depth_obs_indices), self.depth_height, self.depth_width), dtype=np.float32)
+        return self._last_depth_images[self.depth_obs_indices, ...]
+
+    def _vis_depth_obs(self, depth_obs: np.ndarray):
+        depth_tiles = (np.clip(depth_obs[0], 0.0, 1.0) * 255).astype(np.uint8)
+        rows, cols = 2, 4
+        tile_h, tile_w = depth_tiles.shape[1], depth_tiles.shape[2]
+        grid = np.zeros((rows * tile_h, cols * tile_w), dtype=np.uint8)
+        for idx in range(depth_tiles.shape[0]):
+            r, c = divmod(idx, cols)
+            grid[r * tile_h : (r + 1) * tile_h, c * tile_w : (c + 1) * tile_w] = depth_tiles[idx]
+        cv2.imwrite("depth_obs_grid.png", grid)
 
 
 class ParkourColdStartAgent(OnboardAgent):
@@ -380,3 +494,15 @@ class ParkourColdStartAgent(OnboardAgent):
         self.start_dof_pos = self._get_joint_pos_rel_obs()
         self.dof_pos_err = self.joint_target_pos - self.start_dof_pos
         self.step_count = 0
+
+
+class ParkourStandAgent(ParkourAgent):
+    def __init__(
+        self,
+        logdir: str,
+        ros_node: Ros2Real,
+    ):
+        super().__init__(logdir, ros_node)
+
+    def _start_rs_pipeline(self):
+        pass
