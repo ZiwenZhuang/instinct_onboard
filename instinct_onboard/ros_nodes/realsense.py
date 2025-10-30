@@ -11,14 +11,14 @@ from .ros_real import Ros2Real
 
 class RealSenseCamera:
     def __init__(self, resolution: Tuple[int, int], fps: int):
-        self.resolution = resolution
+        self.resolution = resolution  # (width, height)
         self.fps = fps
         self.pipeline = rs.pipeline()
         self.config = rs.config()
         self.config.enable_stream(
             rs.stream.depth,
-            resolution[0],
-            resolution[1],
+            self.resolution[0],
+            self.resolution[1],
             rs.format.z16,
             fps,
         )
@@ -82,14 +82,14 @@ class RsCameraNodeMixin:
         *args,
         rs_resolution: Tuple[int, int] = (480, 270),  # (width, height)
         rs_fps: int = 60,
-        individual_process: bool = False,
+        camera_individual_process: bool = False,
         **kwargs
     ):
         super().__init__(*args, **kwargs)
         # Add any depth-specific initialization here
         self.rs_resolution = rs_resolution
         self.rs_fps = rs_fps
-        self.individual_process = individual_process
+        self.camera_individual_process = camera_individual_process
         self.camera = None
         self.camera_process = None
         self.request_queue = None
@@ -97,7 +97,7 @@ class RsCameraNodeMixin:
 
     def initialize_camera(self):
         """Initialize the RealSense camera with the specified configuration."""
-        if self.individual_process:
+        if self.camera_individual_process:
             self.request_queue = mp.Queue()
             self.result_queue = mp.Queue()
             self.camera_process = mp.Process(
@@ -119,13 +119,16 @@ class RsCameraNodeMixin:
             self.rs_depth_scale = self.camera.depth_scale
 
     def get_rs_data(self) -> np.ndarray or None:
-        if self.individual_process:
+        if self.camera_individual_process:
             if self.camera_process is None:
                 raise ValueError("Camera not initialized. Call initialize_camera first.")
             # Dump queue and get latest
             latest = self.result_queue.get()  # Block until at least one
             while not self.result_queue.empty():
-                latest = self.result_queue.get()
+                try:
+                    latest = self.result_queue.get_nowait()
+                except mp.queues.Empty:
+                    break
             return latest
         else:
             if self.camera is None:
@@ -133,9 +136,13 @@ class RsCameraNodeMixin:
             return self.camera.get_camera_data()  # (height, width)
 
     def destroy_node(self):
-        if self.individual_process and self.camera_process:
+        if self.camera_individual_process and self.camera_process:
             self.request_queue.put(None)  # Signal to exit
-            self.camera_process.join()
+            self.camera_process.join(timeout=1.0)
+            if self.camera_process.is_alive():
+                print("Warning: Camera process did not terminate gracefully, forcing terminate.")
+                self.camera_process.terminate()
+                self.camera_process.join()
         super().destroy_node()
 
 
