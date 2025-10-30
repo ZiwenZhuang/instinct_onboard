@@ -254,10 +254,10 @@ class ColdStartAgent(OnboardAgent):
         self.ros_node = ros_node
         self.startup_step_size = startup_step_size
         self.joint_target_pos = np.zeros(self.ros_node.NUM_JOINTS) if joint_target_pos is None else joint_target_pos
-        self._action_offset = (
+        self._action_scale = (
             np.zeros(self.ros_node.NUM_JOINTS, dtype=np.float32) if action_scale is None else action_scale
         )
-        self._action_scale = (
+        self._action_offset = (
             np.ones(self.ros_node.NUM_JOINTS, dtype=np.float32) if action_offset is None else action_offset
         )
         self._p_gains = np.ones(self.ros_node.NUM_JOINTS, dtype=np.float32) * 10.0 if p_gains is None else p_gains
