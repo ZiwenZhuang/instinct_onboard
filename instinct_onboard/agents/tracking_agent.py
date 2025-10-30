@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 
+import cv2
 import numpy as np
 import onnxruntime as ort
 import quaternion
@@ -34,9 +35,6 @@ class TrackerAgent(OnboardAgent):
         self._parse_action_config()
         self._load_models()
         self._load_motion(motion_file)
-
-    def _parse_obs_config(self):
-        super()._parse_obs_config()
 
     def _load_models(self):
         """Load the ONNX model for the agent."""
@@ -166,8 +164,70 @@ class TrackerAgent(OnboardAgent):
             startup_step_size=startup_step_size,
             ros_node=self.ros_node,
             joint_target_pos=joint_target_pos,
-            action_scale=self.action_offset,  # Note: passing action_offset here sets _action_offset in ColdStartAgent due to parameter naming in init
-            action_offset=self.action_scale,  # passing action_scale here sets _action_scale
+            action_scale=self.action_scale,  # Note: passing action_offset here sets _action_offset in ColdStartAgent due to parameter naming in init
+            action_offset=self.action_offset,  # passing action_scale here sets _action_scale
             p_gains=self.p_gains * kpkd_factor,
             d_gains=self.d_gains * kpkd_factor,
         )
+
+
+class PerceptiveTrackerAgent(TrackerAgent):
+
+    def _load_models(self):
+        super()._load_models()
+        ort_execution_providers = ort.get_available_providers()
+        depth_image_encoder_path = os.path.join(self.logdir, "exported", "0-depth_image.onnx")
+        self.ort_sessions["depth_image_encoder"] = ort.InferenceSession(
+            depth_image_encoder_path, providers=ort_execution_providers
+        )
+
+    def _parse_obs_config(self):
+        super()._parse_obs_config()
+        # add depth image cropping and normalization configs
+        sim_resolution_before_crop = (
+            self.cfg["scene"]["camera"]["pattern_cfg"]["width"],
+            self.cfg["scene"]["camera"]["pattern_cfg"]["height"],
+        )
+        sim_crop_region = self.cfg["scene"]["camera"]["noise_pipeline"]["crop_and_resize"][
+            "crop_region"
+        ]  # up, down, left, right
+        real_resolution = self.ros_node.rs_resolution  # (width, height)
+        real_crop_region = (
+            int(sim_crop_region[0] * real_resolution[1] / sim_resolution_before_crop[1]),  # up
+            int(sim_crop_region[1] * real_resolution[1] / sim_resolution_before_crop[1]),  # down
+            int(sim_crop_region[2] * real_resolution[0] / sim_resolution_before_crop[0]),  # left
+            int(sim_crop_region[3] * real_resolution[0] / sim_resolution_before_crop[0]),  # right
+        )
+        self.depth_image_crop_region = real_crop_region  # (up, down, left, right)
+        self.depth_image_final_resolution = self.cfg["scene"]["camera"]["noise_pipeline"]["crop_and_resize"][
+            "resize_shape"
+        ]  # (height, width)
+        self.depth_image_clip_range = self.cfg["scene"]["camera"]["noise_pipeline"]["normalize"][
+            "depth_range"
+        ]  # (min, max)
+        self.depth_image_shall_normalize = self.cfg["scene"]["camera"]["noise_pipeline"]["normalize"]["normalize"]
+
+    def _get_visualizable_image_obs(self):
+        """Return the depth image embedding."""
+        depth_image: np.ndarray = self.ros_node.get_rs_data()
+        # normalize based on given range
+        depth_image = np.clip(depth_image, self.depth_image_clip_range[0], self.depth_image_clip_range[1])
+        if self.depth_image_shall_normalize:
+            depth_image = (depth_image - self.depth_image_clip_range[0]) / (
+                self.depth_image_clip_range[1] - self.depth_image_clip_range[0]
+            )
+        # crop the depth image
+        depth_image = depth_image[
+            self.depth_image_crop_region[0] : -self.depth_image_crop_region[1],
+            self.depth_image_crop_region[2] : -self.depth_image_crop_region[3],
+        ]
+        # resize the depth image to the final resolution
+        depth_image = cv2.resize(
+            depth_image,
+            (self.depth_image_final_resolution[1], self.depth_image_final_resolution[0]),
+            interpolation=cv2.INTER_LINEAR,
+        )
+        # run the depth image encoder
+        # depth_image_encoder_input_name = self.ort_sessions["depth_image_encoder"].get_inputs()[0].name
+        # depth_image_encoder_output = self.ort_sessions["depth_image_encoder"].run(None, {depth_image_encoder_input_name: depth_image})[0]
+        return depth_image
