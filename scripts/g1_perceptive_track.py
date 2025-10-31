@@ -10,6 +10,7 @@ from tf2_ros import TransformBroadcaster
 
 from instinct_onboard.agents.base import ColdStartAgent
 from instinct_onboard.agents.tracking_agent import PerceptiveTrackerAgent, TrackerAgent
+from instinct_onboard.agents.walk_agent import WalkAgent
 from instinct_onboard.robot_cfgs import WirelessButtons
 
 # from instinct_onboard.ros_nodes.ros_real import Ros2Real
@@ -52,7 +53,11 @@ class G1TrackingNode(RsCameraNode):
 
         elif self.current_agent_name == "cold_start":
             action, done = self.available_agents[self.current_agent_name].step()
-            if done:
+            if done and ("walk" in self.available_agents.keys()):
+                self.get_logger().info(
+                    "ColdStartAgent done, press 'up' to switch to walk agent.", throttle_duration_sec=10.0
+                )
+            else:
                 self.get_logger().info(
                     "ColdStartAgent done, press 'L1' to switch to tracking agent.", throttle_duration_sec=10.0
                 )
@@ -63,7 +68,24 @@ class G1TrackingNode(RsCameraNode):
                 self.available_agents[self.current_agent_name].p_gains,
                 self.available_agents[self.current_agent_name].d_gains,
             )
+            if done and (self.joy_stick_buffer.keys & WirelessButtons.up):
+                self.get_logger().info("up button pressed, switching to walk agent.")
+                self.current_agent_name = "walk"
+                self.available_agents[self.current_agent_name].reset()
             if done and (self.joy_stick_buffer.keys & WirelessButtons.L1):
+                if "walk" in self.available_agents.keys():
+                    self.get_logger().warn("L1 button pressed, but there is a walk agent registered. ignored")
+
+        elif self.current_agent_name == "walk":
+            action, done = self.available_agents[self.current_agent_name].step()
+            self.send_action(
+                action,
+                self.available_agents[self.current_agent_name].action_offset,
+                self.available_agents[self.current_agent_name].action_scale,
+                self.available_agents[self.current_agent_name].p_gains,
+                self.available_agents[self.current_agent_name].d_gains,
+            )
+            if self.joy_stick_buffer.keys & WirelessButtons.L1:
                 self.get_logger().info("L1 button pressed, switching to tracking agent.")
                 self.current_agent_name = "tracking"
                 self.available_agents[self.current_agent_name].reset()
@@ -77,7 +99,18 @@ class G1TrackingNode(RsCameraNode):
                 self.available_agents[self.current_agent_name].p_gains,
                 self.available_agents[self.current_agent_name].d_gains,
             )
-            if done:
+            if self.joy_stick_buffer.keys & WirelessButtons.up:
+                self.get_logger().info(
+                    "up button pressed, switching to walk agent (no matter whether the tracking agent is done)."
+                )
+                self.current_agent_name = "walk"
+                self.available_agents[self.current_agent_name].reset()
+            if done and ("walk" in self.available_agents.keys()):
+                # switch to walk agent
+                self.get_logger().info("TrackingAgent done, switching to walk agent.")
+                self.current_agent_name = "walk"
+                self.available_agents[self.current_agent_name].reset()
+            elif done:
                 self.get_logger().info("TrackingAgent done, turning off motors.")
                 self._turn_off_motors()
                 sys.exit(0)
@@ -127,7 +160,23 @@ def main(args):
         motion_file=args.motion_file,
         ros_node=node,
     )
-    cold_start_agent = tracking_agent.get_cold_start_agent(args.startup_step_size, args.kpkd_factor)
+    if args.walk_logdir is not None:
+        walk_agent = WalkAgent(
+            logdir=args.walk_logdir,
+            ros_node=node,
+        )
+        cold_start_agent = ColdStartAgent(
+            startup_step_size=args.startup_step_size,
+            ros_node=node,
+            joint_target_pos=walk_agent.default_joint_pos,
+            action_scale=walk_agent.action_scale,
+            action_offset=walk_agent.action_offset,
+            p_gains=walk_agent.p_gains * args.kpkd_factor,
+            d_gains=walk_agent.d_gains * args.kpkd_factor,
+        )
+        node.register_agent("walk", walk_agent)
+    else:
+        cold_start_agent = tracking_agent.get_cold_start_agent(args.startup_step_size, args.kpkd_factor)
 
     node.register_agent("cold_start", cold_start_agent)
     node.register_agent("tracking", tracking_agent)
@@ -157,6 +206,12 @@ if __name__ == "__main__":
         "--motion_file",
         type=str,
         help="Path to the motion file",
+    )
+    parser.add_argument(
+        "--walk_logdir",
+        type=str,
+        help="Directory to load the walk agent from",
+        default=None,
     )
     parser.add_argument(
         "--startup_step_size",
