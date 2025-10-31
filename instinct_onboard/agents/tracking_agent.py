@@ -81,6 +81,7 @@ class TrackerAgent(OnboardAgent):
 
     def reset(self):
         """Reset the agent state and the rosbag reader."""
+        super().reset()
         self.motion_cursor_idx = 0
 
     def step(self):
@@ -207,8 +208,47 @@ class PerceptiveTrackerAgent(TrackerAgent):
         ]  # (min, max)
         self.depth_image_shall_normalize = self.cfg["scene"]["camera"]["noise_pipeline"]["normalize"]["normalize"]
 
+    def reset(self):
+        super().reset()
+        if not hasattr(self, "depth_image_slice"):
+            self.depth_image_slice = self._get_obs_slice("depth_image")
+
+    def step(self):
+        self.motion_cursor_idx += 1
+        done = self.motion_cursor_idx >= self.motion_total_num_frames - 1
+        self.motion_cursor_idx = (
+            self.motion_cursor_idx
+            if self.motion_cursor_idx < self.motion_total_num_frames
+            else self.motion_total_num_frames - 1
+        )
+        obs = self._get_observation()
+        normalized_obs = self.normalizer.normalize(obs).astype(np.float32)[None, :]
+        depth_image = normalized_obs[:, self.depth_image_slice].reshape(
+            1, 1, *self.depth_image_final_resolution
+        )  # (1, 1, height, width)
+        depth_image_encoder_input_name = self.ort_sessions["depth_image_encoder"].get_inputs()[0].name
+        depth_embedding = self.ort_sessions["depth_image_encoder"].run(
+            None, {depth_image_encoder_input_name: depth_image}
+        )[0]
+        actor_input = np.concatenate(
+            [
+                normalized_obs[:, : self.depth_image_slice.start],
+                depth_embedding,
+                normalized_obs[:, self.depth_image_slice.stop :],
+            ],
+            axis=-1,
+        )  # (1, dim)
+        actor_input_name = self.ort_sessions["actor"].get_inputs()[0].name
+        action = self.ort_sessions["actor"].run(None, {actor_input_name: actor_input})[0]
+        action = action.reshape(-1)
+        return action, done
+
+    """
+    Agent specific observation functions for PerceptiveTrackerAgent.
+    """
+
     def _get_visualizable_image_obs(self):
-        """Return the depth image embedding."""
+        """Return the depth image."""
         depth_image: np.ndarray = self.ros_node.get_rs_data()
         # normalize based on given range
         depth_image = np.clip(depth_image, self.depth_image_clip_range[0], self.depth_image_clip_range[1])
@@ -227,7 +267,4 @@ class PerceptiveTrackerAgent(TrackerAgent):
             (self.depth_image_final_resolution[1], self.depth_image_final_resolution[0]),
             interpolation=cv2.INTER_LINEAR,
         )
-        # run the depth image encoder
-        # depth_image_encoder_input_name = self.ort_sessions["depth_image_encoder"].get_inputs()[0].name
-        # depth_image_encoder_output = self.ort_sessions["depth_image_encoder"].run(None, {depth_image_encoder_input_name: depth_image})[0]
         return depth_image
