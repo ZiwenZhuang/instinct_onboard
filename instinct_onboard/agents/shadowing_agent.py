@@ -82,7 +82,7 @@ class ShadowingAgent(OnboardAgent):
 
     def reset(self):
         """Reset the agent state and the rosbag reader."""
-        pass
+        super().reset()
 
     def step(self):
         """Perform a single step of the agent."""
