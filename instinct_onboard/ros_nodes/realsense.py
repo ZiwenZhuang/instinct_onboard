@@ -94,6 +94,7 @@ class RsCameraNodeMixin:
         self.camera_process = None
         self.request_queue = None
         self.result_queue = None
+        self.initialize_camera()
 
     def initialize_camera(self):
         """Initialize the RealSense camera with the specified configuration."""
@@ -117,6 +118,16 @@ class RsCameraNodeMixin:
                 fps=self.rs_fps,
             )
             self.rs_depth_scale = self.camera.depth_scale
+
+    def start_ros_handlers(self):
+        self.realsense_timer = self.create_timer(1.0 / self.rs_fps, self.realsense_callback)
+        super().start_ros_handlers()
+
+    def realsense_callback(self):
+        """Callback to ensure the depth data is always updated.
+        This is used to ensure the depth data is always updated, even if the camera is not publishing.
+        """
+        self.rs_depth_data = self.get_rs_data()
 
     def get_rs_data(self) -> np.ndarray or None:
         if self.camera_individual_process:
@@ -147,6 +158,4 @@ class RsCameraNodeMixin:
 
 
 class RsCameraNode(RsCameraNodeMixin, Ros2Real):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.initialize_camera()
+    pass
