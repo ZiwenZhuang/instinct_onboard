@@ -35,7 +35,7 @@ class RealSenseCamera:
     def get_frame(self) -> rs.depth_frame or None:
         # read from pyrealsense2, preprocess and write the model embedding to the buffer
         timeout_ms = int(1000 / self.fps)  # ms
-        frames = self.pipeline.wait_for_frames(timeout_ms)
+        frames = self.pipeline.wait_for_frames(timeout_ms * 2)
         depth_frame = frames.get_depth_frame()
         return depth_frame
 
