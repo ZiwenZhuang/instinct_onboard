@@ -233,8 +233,8 @@ class PerceptiveTrackerAgent(TrackerAgent):
         actor_input = np.concatenate(
             [
                 normalized_obs[:, : self.depth_image_slice.start],
-                depth_embedding,
                 normalized_obs[:, self.depth_image_slice.stop :],
+                depth_embedding,
             ],
             axis=-1,
         )  # (1, dim)
