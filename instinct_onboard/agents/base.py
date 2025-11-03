@@ -137,8 +137,13 @@ class OnboardAgent(ABC):
              obs_config["func"]:"generated_commands", obs_config["params"]["command_name"]: joint_pos_command
         """
         command_name = obs_config["params"]["command_name"]  # e.g. joint_pos_command
-        if hasattr(self, f"_get_{command_name}_obs"):
+        if hasattr(self, f"_get_{command_name}_cmd_obs"):
+            self.obs_funcs[obs_name] = getattr(self, f"_get_{command_name}_cmd_obs")
+        elif hasattr(self, f"_get_{command_name}_obs"):
             self.obs_funcs[obs_name] = getattr(self, f"_get_{command_name}_obs")
+            print(
+                "Warning: '_get_{command_name}_obs' for command {command_name} shall be deprecated. Please implementing your command-related observation function '_get_{command_name}_cmd_obs' instead."
+            )
         else:
             raise ValueError(
                 f"Generated command observation function '_get_{command_name}_obs' not found in the agent. "
