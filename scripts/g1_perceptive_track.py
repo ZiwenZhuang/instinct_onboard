@@ -158,6 +158,7 @@ def main(args):
     tracking_agent = PerceptiveTrackerAgent(
         logdir=args.logdir,
         motion_file=args.motion_file,
+        depth_vis=args.depth_vis,
         ros_node=node,
     )
     if args.walk_logdir is not None:
@@ -230,6 +231,12 @@ if __name__ == "__main__":
         type=float,
         default=2.0,
         help="KPKD factor for the cold start agent (default: 2.0)",
+    )
+    parser.add_argument(
+        "--depth_vis",
+        action="store_true",
+        default=False,
+        help="Visualize the depth image (default: False)",
     )
     parser.add_argument(
         "--debug",

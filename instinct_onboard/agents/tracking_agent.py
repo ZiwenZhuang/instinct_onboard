@@ -6,6 +6,9 @@ import cv2
 import numpy as np
 import onnxruntime as ort
 import quaternion
+import ros2_numpy as rnp
+from rclpy.publisher import Publisher
+from sensor_msgs.msg import Image
 
 from instinct_onboard.agents.base import ColdStartAgent, OnboardAgent
 from instinct_onboard.normalizer import Normalizer
@@ -174,6 +177,14 @@ class TrackerAgent(OnboardAgent):
 
 class PerceptiveTrackerAgent(TrackerAgent):
 
+    def __init__(self, *args, depth_vis: bool = False, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.depth_vis = depth_vis
+        if self.depth_vis:
+            self.debug_depth_publisher = self.ros_node.create_publisher(Image, "/realsense/depth_image", 10)
+        else:
+            self.debug_depth_publisher = None
+
     def _load_models(self):
         super()._load_models()
         ort_execution_providers = ort.get_available_providers()
@@ -241,6 +252,17 @@ class PerceptiveTrackerAgent(TrackerAgent):
         actor_input_name = self.ort_sessions["actor"].get_inputs()[0].name
         action = self.ort_sessions["actor"].run(None, {actor_input_name: actor_input})[0]
         action = action.reshape(-1)
+
+        if self.debug_depth_publisher is not None:
+            # NOTE: the +5.0 is a empirical value to ensure the normalized obs is not negative.
+            # Not using normalizer's value is to prevent further visualization code bugs.
+            depth_image_msg_data = np.asanyarray(
+                (normalized_obs[:, self.depth_image_slice] + 5.0).reshape(*self.depth_image_final_resolution) * 255,
+                dtype=np.uint16,
+            )
+            depth_image_msg = rnp.msgify(Image, depth_image_msg_data, encoding="16UC1")
+            self.debug_depth_publisher.publish(depth_image_msg)
+
         return action, done
 
     """
@@ -249,7 +271,7 @@ class PerceptiveTrackerAgent(TrackerAgent):
 
     def _get_visualizable_image_obs(self):
         """Return the depth image."""
-        depth_image: np.ndarray = self.ros_node.get_rs_data()
+        depth_image: np.ndarray = self.ros_node.rs_depth_data
         # normalize based on given range
         depth_image = np.clip(depth_image, self.depth_image_clip_range[0], self.depth_image_clip_range[1])
         if self.depth_image_shall_normalize:
