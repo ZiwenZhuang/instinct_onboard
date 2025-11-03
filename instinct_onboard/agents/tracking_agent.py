@@ -126,17 +126,17 @@ class TrackerAgent(OnboardAgent):
     Agent specific observation functions for TrackerAgent.
     """
 
-    def _get_joint_pos_ref_command_obs(self):
+    def _get_joint_pos_ref_command_cmd_obs(self):
         frame_indices = self.motion_frame_indices_offset + self.motion_cursor_idx
         frame_indices = frame_indices.clip(max=self.motion_total_num_frames - 1)
         return self.motion_joint_pos[frame_indices] - self.default_joint_pos[None, :]
 
-    def _get_joint_vel_ref_command_obs(self):
+    def _get_joint_vel_ref_command_cmd_obs(self):
         frame_indices = self.motion_frame_indices_offset + self.motion_cursor_idx
         frame_indices = frame_indices.clip(max=self.motion_total_num_frames - 1)
         return self.motion_joint_vel[frame_indices]
 
-    def _get_position_b_ref_command_obs(self):
+    def _get_position_b_ref_command_cmd_obs(self):
         """Return the future position reference in current motion reference's base frame."""
         frame_indices = self.motion_frame_indices_offset + self.motion_cursor_idx
         frame_indices = frame_indices.clip(max=self.motion_total_num_frames - 1)
@@ -148,7 +148,7 @@ class TrackerAgent(OnboardAgent):
         )
         return future_motion_base_pos_b  # (num_frames, 3)
 
-    def _get_rotation_ref_command_obs(self):
+    def _get_rotation_ref_command_cmd_obs(self):
         """
         Return the future rotation reference in current robot's base frame.
         """
