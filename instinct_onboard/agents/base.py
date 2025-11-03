@@ -2,7 +2,7 @@ import os
 import re
 from abc import ABC, abstractmethod
 from collections import OrderedDict
-from typing import Tuple
+from typing import Callable, Tuple
 
 import numpy as np
 import yaml
@@ -98,10 +98,10 @@ class OnboardAgent(ABC):
 
     def _parse_obs_config(self):
         """Parse, set attributes from config dict, initialize buffers to speed up the computation"""
-        self.obs_funcs = OrderedDict()
-        self.obs_clip = dict()
-        self.obs_scales = dict()
-        self.obs_history_buffers = dict()
+        self.obs_funcs: OrderedDict[str, Callable] = OrderedDict()
+        self.obs_clip: dict[str, float] = dict()
+        self.obs_scales: dict[str, float] = dict()
+        self.obs_history_buffers: dict[str, CircularBuffer] = dict()
         for obs_name, obs_config in self.cfg["observations"]["policy"].items():
             if (
                 obs_name == "concatenate_terms"
@@ -137,8 +137,13 @@ class OnboardAgent(ABC):
              obs_config["func"]:"generated_commands", obs_config["params"]["command_name"]: joint_pos_command
         """
         command_name = obs_config["params"]["command_name"]  # e.g. joint_pos_command
-        if hasattr(self, f"_get_{command_name}_obs"):
+        if hasattr(self, f"_get_{command_name}_cmd_obs"):
+            self.obs_funcs[obs_name] = getattr(self, f"_get_{command_name}_cmd_obs")
+        elif hasattr(self, f"_get_{command_name}_obs"):
             self.obs_funcs[obs_name] = getattr(self, f"_get_{command_name}_obs")
+            print(
+                "Warning: '_get_{command_name}_obs' for command {command_name} shall be deprecated. Please implementing your command-related observation function '_get_{command_name}_cmd_obs' instead."
+            )
         else:
             raise ValueError(
                 f"Generated command observation function '_get_{command_name}_obs' not found in the agent. "
@@ -188,6 +193,22 @@ class OnboardAgent(ABC):
         obs = np.concatenate(obs, axis=-1)  # Concatenate all observations into a single vector
         return obs
 
+    def _build_obs_shapes(self) -> None:
+        """Build the obs_shapes if not exists. Please make sure this functions is called before self.reset() procedures."""
+        if not hasattr(self, "obs_shapes"):
+            self.obs_shapes: OrderedDict[str, tuple] = OrderedDict()
+            for obs_name in self.obs_funcs.keys():
+                self.obs_shapes[obs_name] = self._get_single_obs_term(obs_name).shape  # (dim,)
+
+    def _get_obs_slice(self, obs_name: str) -> slice:
+        """Get the slice of the observation term by its name in the concatenated observation vector."""
+        assert hasattr(self, "obs_shapes"), "obs_shapes must be built before calling this function"
+        obs_term_names = list(self.obs_funcs.keys())
+        target_obs_term_idx = obs_term_names.index(obs_name)
+        start_idx = sum(np.prod(self.obs_shapes[obs_name]) for obs_name in obs_term_names[:target_obs_term_idx])
+        end_idx = start_idx + np.prod(self.obs_shapes[obs_name])
+        return slice(start_idx, end_idx)
+
     @abstractmethod
     def step(self) -> Tuple[np.ndarray, bool]:
         """Run a single step of the ONNX model and return the resulting action and whether the motion is done.
@@ -198,6 +219,7 @@ class OnboardAgent(ABC):
     @abstractmethod
     def reset(self):
         """Reset the agent. This is a placeholder for any reset logic if needed."""
+        self._build_obs_shapes()
         for obs_history_buffer in self.obs_history_buffers.values():
             obs_history_buffer.reset()
 
