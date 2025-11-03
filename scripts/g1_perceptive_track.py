@@ -228,8 +228,8 @@ if __name__ == "__main__":
     parser.add_argument(
         "--kpkd_factor",
         type=float,
-        default=1.0,
-        help="KPKD factor for the cold start agent (default: 1.0)",
+        default=2.0,
+        help="KPKD factor for the cold start agent (default: 2.0)",
     )
     parser.add_argument(
         "--debug",
