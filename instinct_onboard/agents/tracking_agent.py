@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import os
 
 import cv2
@@ -7,8 +8,10 @@ import numpy as np
 import onnxruntime as ort
 import quaternion
 import ros2_numpy as rnp
+from geometry_msgs.msg import TransformStamped
 from rclpy.publisher import Publisher
-from sensor_msgs.msg import Image
+from sensor_msgs.msg import Image, PointCloud2, PointField
+from tf2_ros import StaticTransformBroadcaster
 
 from instinct_onboard.agents.base import ColdStartAgent, OnboardAgent
 from instinct_onboard.normalizer import Normalizer
@@ -177,13 +180,33 @@ class TrackerAgent(OnboardAgent):
 
 class PerceptiveTrackerAgent(TrackerAgent):
 
-    def __init__(self, *args, depth_vis: bool = False, **kwargs):
+    def __init__(self, *args, depth_vis: bool = False, pointcloud_vis: bool = False, **kwargs):
         super().__init__(*args, **kwargs)
         self.depth_vis = depth_vis
         if self.depth_vis:
             self.debug_depth_publisher = self.ros_node.create_publisher(Image, "/realsense/depth_image", 10)
         else:
             self.debug_depth_publisher = None
+        self.pointcloud_vis = pointcloud_vis
+        if self.pointcloud_vis:
+            # Publish static TF
+            self.static_tf_broadcaster = StaticTransformBroadcaster(self.ros_node)
+            t = TransformStamped()
+            t.header.stamp = self.ros_node.get_clock().now().to_msg()
+            t.header.frame_id = "torso_link"
+            t.child_frame_id = "d435_depth_link"
+            t.transform.translation.x = 0.04764571478 + 0.0039635 - 0.0042 * math.cos(math.radians(48))
+            t.transform.translation.y = 0.015
+            t.transform.translation.z = 0.46268178553 - 0.044 + 0.0042 * math.sin(math.radians(48)) + 0.016
+            t.transform.rotation.w = math.cos(math.radians(0.5) / 2) * math.cos(math.radians(48) / 2)
+            t.transform.rotation.x = math.sin(math.radians(0.5) / 2)
+            t.transform.rotation.y = math.sin(math.radians(48) / 2)
+            t.transform.rotation.z = 0.0
+            self.static_tf_broadcaster.sendTransform(t)
+
+            self.debug_pointcloud_publisher = self.ros_node.create_publisher(PointCloud2, "/realsense/pointcloud", 10)
+        else:
+            self.debug_pointcloud_publisher = None
 
     def _load_models(self):
         super()._load_models()
@@ -218,6 +241,19 @@ class PerceptiveTrackerAgent(TrackerAgent):
             "depth_range"
         ]  # (min, max)
         self.depth_image_shall_normalize = self.cfg["scene"]["camera"]["noise_pipeline"]["normalize"]["normalize"]
+        self.depth_image_normalized_output_range = self.cfg["scene"]["camera"]["noise_pipeline"]["normalize"][
+            "output_range"
+        ]
+        if "gaussian_blur_noise" in self.cfg["scene"]["camera"]["noise_pipeline"]:
+            self.depth_image_gaussian_blur_kernel_size = self.cfg["scene"]["camera"]["noise_pipeline"][
+                "gaussian_blur_noise"
+            ]["kernel_size"]
+            self.depth_image_gaussian_blur_sigma = self.cfg["scene"]["camera"]["noise_pipeline"]["gaussian_blur_noise"][
+                "sigma"
+            ]
+        else:
+            self.depth_image_gaussian_blur_kernel_size = None
+            self.depth_image_gaussian_blur_sigma = None
 
     def reset(self):
         super().reset()
@@ -257,13 +293,75 @@ class PerceptiveTrackerAgent(TrackerAgent):
             # NOTE: the +5.0 is a empirical value to ensure the normalized obs is not negative.
             # Not using normalizer's value is to prevent further visualization code bugs.
             depth_image_msg_data = np.asanyarray(
-                (normalized_obs[:, self.depth_image_slice] + 5.0).reshape(*self.depth_image_final_resolution) * 255,
+                obs[self.depth_image_slice].reshape(*self.depth_image_final_resolution) * 255 * 2,
                 dtype=np.uint16,
             )
             depth_image_msg = rnp.msgify(Image, depth_image_msg_data, encoding="16UC1")
             self.debug_depth_publisher.publish(depth_image_msg)
-
+        if self.debug_pointcloud_publisher is not None:
+            pointcloud_msg = self.create_pointcloud_msg(
+                obs[self.depth_image_slice].reshape(*self.depth_image_final_resolution) * self.depth_image_clip_range[1]
+                + self.depth_image_clip_range[0]
+            )
+            self.debug_pointcloud_publisher.publish(pointcloud_msg)
         return action, done
+
+    def create_pointcloud_msg(self, depth_data: np.ndarray) -> PointCloud2:
+        height, width = depth_data.shape
+        vfov_deg = 58.0
+        vfov_rad = np.deg2rad(vfov_deg)
+        f = (height / 2.0) / np.tan(vfov_rad / 2.0)  # focal length in pixels (assuming fy = f)
+
+        # Assuming square pixels, fx = fy = f, cx = width/2, cy = height/2
+        cx = width / 2.0
+        cy = height / 2.0
+
+        # Create grid of pixel coordinates
+        u, v = np.meshgrid(np.arange(width), np.arange(height))
+
+        depth = depth_data.astype(np.float32)
+
+        x = (u - cx) * depth / f
+        y = (v - cy) * depth / f
+        z = depth
+
+        # Stack to (H*W, 3)
+        points = np.stack((x, y, z), axis=-1).reshape(-1, 3)
+
+        # Filter invalid points (depth == 0)
+        valid = (z > 0).flatten()
+        points = points[valid]
+
+        # Apply 90-degree rotation around +Y axis: new_x = z, new_y = y, new_z = -x
+        rotated_points = np.empty_like(points)
+        rotated_points[:, 0] = points[:, 2]  # new_x = old_z
+        rotated_points[:, 1] = points[:, 1]  # new_y = old_y
+        rotated_points[:, 2] = -points[:, 0]  # new_z = -old_x
+
+        # Apply additional -90 degree rotation around +X axis: final_x = rotated_x, final_y = rotated_z, final_z = -rotated_y
+        final_points = np.empty_like(rotated_points)
+        final_points[:, 0] = rotated_points[:, 0]
+        final_points[:, 1] = rotated_points[:, 2]
+        final_points[:, 2] = -rotated_points[:, 1]
+
+        # Create PointCloud2
+        msg = PointCloud2()
+        msg.header.stamp = self.ros_node.get_clock().now().to_msg()
+        msg.header.frame_id = "d435_depth_link"
+        msg.height = 1
+        msg.width = len(final_points)
+        msg.fields = [
+            PointField(name="x", offset=0, datatype=PointField.FLOAT32, count=1),
+            PointField(name="y", offset=4, datatype=PointField.FLOAT32, count=1),
+            PointField(name="z", offset=8, datatype=PointField.FLOAT32, count=1),
+        ]
+        msg.is_bigendian = False
+        msg.point_step = 12  # 3 floats * 4 bytes
+        msg.row_step = msg.point_step * msg.width
+        msg.is_dense = True
+        msg.data = final_points.astype(np.float32).tobytes()
+
+        return msg
 
     """
     Agent specific observation functions for PerceptiveTrackerAgent.
@@ -277,6 +375,19 @@ class PerceptiveTrackerAgent(TrackerAgent):
         if self.depth_image_shall_normalize:
             depth_image = (depth_image - self.depth_image_clip_range[0]) / (
                 self.depth_image_clip_range[1] - self.depth_image_clip_range[0]
+            )
+            if self.depth_image_normalized_output_range is not None:
+                depth_image = (
+                    depth_image
+                    * (self.depth_image_normalized_output_range[1] - self.depth_image_normalized_output_range[0])
+                    + self.depth_image_normalized_output_range[0]
+                )
+        # gaussian blur the depth image
+        if self.depth_image_gaussian_blur_kernel_size is not None:
+            depth_image = cv2.GaussianBlur(
+                depth_image,
+                (self.depth_image_gaussian_blur_kernel_size, self.depth_image_gaussian_blur_kernel_size),
+                self.depth_image_gaussian_blur_sigma,
             )
         # crop the depth image
         depth_image = depth_image[

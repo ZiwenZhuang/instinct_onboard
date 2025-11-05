@@ -1,8 +1,6 @@
-import time
+import math
 
-import cv2
 import numpy as np
-import pyrealsense2 as rs
 import rclpy
 import ros2_numpy as rnp
 from geometry_msgs.msg import TransformStamped
@@ -17,10 +15,9 @@ from instinct_onboard.ros_nodes.realsense import RsCameraNodeMixin
 class RsCamTestNode(RsCameraNodeMixin, Node):
     def __init__(self):
         super().__init__(rs_resolution=(480, 270), rs_fps=60, node_name="rs_cam_test_node")
-        self.initialize_camera()
 
-        self.depth_publisher = self.create_publisher(Image, "/camera/forward_depth", 10)
-        self.pointcloud_publisher = self.create_publisher(PointCloud2, "/point_cloud", 10)
+        self.depth_publisher = self.create_publisher(Image, "/realsense/depth_image", 10)
+        self.pointcloud_publisher = self.create_publisher(PointCloud2, "/realsense/pointcloud", 10)
         self.debug_msg_publisher = self.create_publisher(String, "/debug_msg", 10)
 
         timer_period = 1.0 / self.rs_fps
@@ -33,12 +30,12 @@ class RsCamTestNode(RsCameraNodeMixin, Node):
         t.header.stamp = self.get_clock().now().to_msg()
         t.header.frame_id = "torso_link"
         t.child_frame_id = "d435_depth_link"
-        t.transform.translation.x = 0.0476457
-        t.transform.translation.y = 0.0
-        t.transform.translation.z = 0.44
-        t.transform.rotation.w = 0.9135455
-        t.transform.rotation.x = 0.0
-        t.transform.rotation.y = 0.4067366
+        t.transform.translation.x = 0.04764571478 + 0.0039635 - 0.0042 * math.cos(math.radians(48))
+        t.transform.translation.y = 0.015
+        t.transform.translation.z = 0.46268178553 - 0.044 + 0.0042 * math.sin(math.radians(48)) + 0.016
+        t.transform.rotation.w = math.cos(math.radians(0.5) / 2) * math.cos(math.radians(48) / 2)
+        t.transform.rotation.x = math.sin(math.radians(0.5) / 2)
+        t.transform.rotation.y = math.sin(math.radians(48) / 2)
         t.transform.rotation.z = 0.0
         self.tf_broadcaster.sendTransform(t)
 
