@@ -159,6 +159,7 @@ def main(args):
         logdir=args.logdir,
         motion_file=args.motion_file,
         depth_vis=args.depth_vis,
+        pointcloud_vis=args.pointcloud_vis,
         ros_node=node,
     )
     if args.walk_logdir is not None:
@@ -237,6 +238,12 @@ if __name__ == "__main__":
         action="store_true",
         default=False,
         help="Visualize the depth image (default: False)",
+    )
+    parser.add_argument(
+        "--pointcloud_vis",
+        action="store_true",
+        default=False,
+        help="Visualize the pointcloud (default: False)",
     )
     parser.add_argument(
         "--debug",

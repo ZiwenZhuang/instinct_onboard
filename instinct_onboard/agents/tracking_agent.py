@@ -19,6 +19,7 @@ from instinct_onboard.ros_nodes.ros_real import Ros2Real
 from instinct_onboard.utils import (
     inv_quat,
     quat_rotate_inverse,
+    quat_slerp_batch,
     quat_to_tan_norm_batch,
     yaw_quat,
 )
@@ -34,8 +35,10 @@ class TrackerAgent(OnboardAgent):
         logdir: str,
         motion_file: str,  # retargetted motion file
         ros_node: Ros2Real,
+        target_motion_framerate: float = 50.0,
     ):
         super().__init__(logdir, ros_node)
+        self.target_motion_framerate = target_motion_framerate
         self.ort_sessions = dict()
         self._parse_obs_config()
         self._parse_action_config()
@@ -70,6 +73,8 @@ class TrackerAgent(OnboardAgent):
         self.motion_base_pos = self.motion_data["base_pos_w"]
         self.motion_base_quat = self.motion_data["base_quat_w"]
         self.motion_total_num_frames = self.motion_data["joint_pos"].shape[0]
+
+        self.match_motion_to_target_framerate()
 
         # prepare the frame indices (offset w.r.t current cursor)
         self.motion_num_frames = self.cfg["scene"]["motion_reference"][
@@ -124,6 +129,41 @@ class TrackerAgent(OnboardAgent):
         rel_pos = self.motion_base_pos - self.motion_base_pos[0:1]  # (N, 3)
         rotated_rel_pos = quaternion.rotate_vectors(heading_err_quat, rel_pos)  # (N, 3)
         self.motion_base_pos = rotated_rel_pos + current_pos_w[None, :]  # (N, 3)
+
+    def match_motion_to_target_framerate(self):
+        """Match the motion framerate to the target framerate by interpolating the motion data."""
+        if self.motion_framerate == self.target_motion_framerate:
+            return
+        self.ros_node.get_logger().info(
+            f"Matching motion framerate from {self.motion_framerate} to {self.target_motion_framerate}."
+        )
+        motion_length_s = self.motion_total_num_frames / self.motion_framerate
+        new_motion_total_num_frames = math.floor(motion_length_s * self.target_motion_framerate)
+        new_motion_frame_idxs = np.linspace(0, self.motion_total_num_frames - 1, new_motion_total_num_frames)
+        new_motion_frame_idxs_floor = np.floor(new_motion_frame_idxs).astype(int)
+        new_motion_frame_idxs_ceil = np.ceil(new_motion_frame_idxs).astype(int)
+        new_motion_frame_idxs_frac = new_motion_frame_idxs - new_motion_frame_idxs_floor
+        # acquire the interpolated data
+        new_joint_pos = (1 - new_motion_frame_idxs_frac)[:, None] * self.motion_joint_pos[
+            new_motion_frame_idxs_floor
+        ] + new_motion_frame_idxs_frac[:, None] * self.motion_joint_pos[new_motion_frame_idxs_ceil]
+        joint_pos_ = np.concatenate([new_joint_pos[0:1], new_joint_pos])
+        new_motion_joint_vel = (joint_pos_[1:] - joint_pos_[:-1]) * self.target_motion_framerate
+        new_motion_base_pos = (1 - new_motion_frame_idxs_frac)[:, None] * self.motion_base_pos[
+            new_motion_frame_idxs_floor
+        ] + new_motion_frame_idxs_frac[:, None] * self.motion_base_pos[new_motion_frame_idxs_ceil]
+        new_motion_base_quat = quat_slerp_batch(
+            self.motion_base_quat[new_motion_frame_idxs_floor],
+            self.motion_base_quat[new_motion_frame_idxs_ceil],
+            new_motion_frame_idxs_frac,
+        )
+        # update the motion data
+        self.motion_framerate = self.target_motion_framerate
+        self.motion_total_num_frames = new_motion_total_num_frames
+        self.motion_joint_pos = new_joint_pos.astype(np.float32)
+        self.motion_joint_vel = new_motion_joint_vel.astype(np.float32)
+        self.motion_base_pos = new_motion_base_pos.astype(np.float32)
+        self.motion_base_quat = new_motion_base_quat.astype(np.float32)
 
     """
     Agent specific observation functions for TrackerAgent.
@@ -386,8 +426,10 @@ class PerceptiveTrackerAgent(TrackerAgent):
         if self.depth_image_gaussian_blur_kernel_size is not None:
             depth_image = cv2.GaussianBlur(
                 depth_image,
-                (self.depth_image_gaussian_blur_kernel_size, self.depth_image_gaussian_blur_kernel_size),
-                self.depth_image_gaussian_blur_sigma,
+                # (self.depth_image_gaussian_blur_kernel_size, self.depth_image_gaussian_blur_kernel_size),
+                # self.depth_image_gaussian_blur_sigma,
+                (3, 3),
+                0.5,
             )
         # crop the depth image
         depth_image = depth_image[
