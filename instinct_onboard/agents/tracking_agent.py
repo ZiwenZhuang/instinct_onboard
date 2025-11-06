@@ -95,10 +95,14 @@ class TrackerAgent(OnboardAgent):
         super().reset()
         self.motion_cursor_idx = 0
 
+    def get_done(self):
+        """Get the done flag."""
+        return (self.motion_cursor_idx + self.motion_frame_indices_offset[-1]) >= self.motion_total_num_frames - 1
+
     def step(self):
         """Perform a single step of the agent."""
         self.motion_cursor_idx += 1
-        done = self.motion_cursor_idx >= self.motion_total_num_frames - 1
+        done = self.get_done()
         self.motion_cursor_idx = (
             self.motion_cursor_idx
             if self.motion_cursor_idx < self.motion_total_num_frames
@@ -302,7 +306,7 @@ class PerceptiveTrackerAgent(TrackerAgent):
 
     def step(self):
         self.motion_cursor_idx += 1
-        done = self.motion_cursor_idx >= self.motion_total_num_frames - 1
+        done = self.get_done()
         self.motion_cursor_idx = (
             self.motion_cursor_idx
             if self.motion_cursor_idx < self.motion_total_num_frames
