@@ -55,11 +55,12 @@ class G1TrackingNode(RsCameraNode):
             action, done = self.available_agents[self.current_agent_name].step()
             if done and ("walk" in self.available_agents.keys()):
                 self.get_logger().info(
-                    "ColdStartAgent done, press 'up' to switch to walk agent.", throttle_duration_sec=10.0
+                    "ColdStartAgent done, press 'L1' to switch to walk agent.", throttle_duration_sec=10.0
                 )
             else:
                 self.get_logger().info(
-                    "ColdStartAgent done, press 'L1' to switch to tracking agent.", throttle_duration_sec=10.0
+                    "ColdStartAgent done, press any direction button to switch to tracking agent.",
+                    throttle_duration_sec=10.0,
                 )
             self.send_action(
                 action,
@@ -68,13 +69,13 @@ class G1TrackingNode(RsCameraNode):
                 self.available_agents[self.current_agent_name].p_gains,
                 self.available_agents[self.current_agent_name].d_gains,
             )
-            if done and (self.joy_stick_buffer.keys & WirelessButtons.up):
-                self.get_logger().info("up button pressed, switching to walk agent.")
+            if done and (self.joy_stick_buffer.keys & WirelessButtons.L1):
+                self.get_logger().info("L1 button pressed, switching to walk agent.")
                 self.current_agent_name = "walk"
                 self.available_agents[self.current_agent_name].reset()
-            if done and (self.joy_stick_buffer.keys & WirelessButtons.L1):
+            if done and (self.joy_stick_buffer.keys & WirelessButtons.up):
                 if "walk" in self.available_agents.keys():
-                    self.get_logger().warn("L1 button pressed, but there is a walk agent registered. ignored")
+                    self.get_logger().warn("up button pressed, but there is a walk agent registered. ignored")
 
         elif self.current_agent_name == "walk":
             action, done = self.available_agents[self.current_agent_name].step()
@@ -85,10 +86,22 @@ class G1TrackingNode(RsCameraNode):
                 self.available_agents[self.current_agent_name].p_gains,
                 self.available_agents[self.current_agent_name].d_gains,
             )
-            if self.joy_stick_buffer.keys & WirelessButtons.L1:
-                self.get_logger().info("L1 button pressed, switching to tracking agent.")
+            if self.joy_stick_buffer.keys & WirelessButtons.up:
+                self.get_logger().info("up button pressed, switching to tracking agent.")
                 self.current_agent_name = "tracking"
-                self.available_agents[self.current_agent_name].reset()
+                self.available_agents[self.current_agent_name].reset("diveroll4-ziwen-0-retargeted.npz")
+            elif self.joy_stick_buffer.keys & WirelessButtons.down:
+                self.get_logger().info("down button pressed, switching to tracking agent.")
+                self.current_agent_name = "tracking"
+                self.available_agents[self.current_agent_name].reset("highjump21-ziwen-retargeted.npz")
+            elif self.joy_stick_buffer.keys & WirelessButtons.left:
+                self.get_logger().info("left button pressed, switching to tracking agent.")
+                self.current_agent_name = "tracking"
+                self.available_agents[self.current_agent_name].reset("rollVault11-ziwen-retargeted.npz")
+            elif self.joy_stick_buffer.keys & WirelessButtons.right:
+                self.get_logger().info("right button pressed, switching to tracking agent.")
+                self.current_agent_name = "tracking"
+                self.available_agents[self.current_agent_name].reset("jumpsit2-ziwen-retargeted.npz")
 
         elif self.current_agent_name == "tracking":
             action, done = self.available_agents[self.current_agent_name].step()
@@ -99,9 +112,9 @@ class G1TrackingNode(RsCameraNode):
                 self.available_agents[self.current_agent_name].p_gains,
                 self.available_agents[self.current_agent_name].d_gains,
             )
-            if self.joy_stick_buffer.keys & WirelessButtons.up:
+            if self.joy_stick_buffer.keys & WirelessButtons.L1:
                 self.get_logger().info(
-                    "up button pressed, switching to walk agent (no matter whether the tracking agent is done)."
+                    "L1 button pressed, switching to walk agent (no matter whether the tracking agent is done)."
                 )
                 self.current_agent_name = "walk"
                 self.available_agents[self.current_agent_name].reset()
@@ -116,21 +129,21 @@ class G1TrackingNode(RsCameraNode):
                 sys.exit(0)
 
     def vis_callback(self):
-        agent = self.available_agents["tracking"]
+        agent: PerceptiveTrackerAgent = self.available_agents["tracking"]
         cursor = agent.motion_cursor_idx
         # Publish JointState for target joints
         js = JointState()
         js.header.stamp = self.get_clock().now().to_msg()
-        js.name = agent.motion_joint_names
-        joint_pos = agent.motion_joint_pos[cursor]
-        joint_vel = agent.motion_joint_vel[cursor]
+        js.name = self.sim_joint_names
+        joint_pos = agent.motion_data.joint_pos[cursor]
+        joint_vel = agent.motion_data.joint_vel[cursor]
         js.position = joint_pos.tolist()
         js.velocity = joint_vel.tolist()
         js.effort = [0.0] * len(joint_pos)
         self.joint_state_publisher.publish(js)
         # Broadcast TF for target base
-        pos = agent.motion_base_pos[cursor]
-        quat = agent.motion_base_quat[cursor]
+        pos = agent.motion_data.base_pos[cursor]
+        quat = agent.motion_data.base_quat[cursor]
         t = TransformStamped()
         t.header.stamp = js.header.stamp
         t.header.frame_id = "world"
@@ -157,7 +170,7 @@ def main(args):
 
     tracking_agent = PerceptiveTrackerAgent(
         logdir=args.logdir,
-        motion_file=args.motion_file,
+        motion_file_dir=args.motion_dir,
         depth_vis=args.depth_vis,
         pointcloud_vis=args.pointcloud_vis,
         ros_node=node,
@@ -205,9 +218,9 @@ if __name__ == "__main__":
         help="Directory to load the agent from",
     )
     parser.add_argument(
-        "--motion_file",
+        "--motion_dir",
         type=str,
-        help="Path to the motion file",
+        help="Directory to the motion files",
     )
     parser.add_argument(
         "--walk_logdir",

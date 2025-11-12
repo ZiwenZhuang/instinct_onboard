@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import math
 import os
+from dataclasses import dataclass
+from typing import Dict, List
 
 import cv2
 import numpy as np
@@ -9,7 +11,6 @@ import onnxruntime as ort
 import quaternion
 import ros2_numpy as rnp
 from geometry_msgs.msg import TransformStamped
-from rclpy.publisher import Publisher
 from sensor_msgs.msg import Image, PointCloud2, PointField
 from tf2_ros import StaticTransformBroadcaster
 
@@ -25,6 +26,70 @@ from instinct_onboard.utils import (
 )
 
 
+@dataclass
+class MotionData:
+    framerate: float
+    # Joint orders must match the robot joint names in simulation order.
+    joint_pos: np.ndarray
+    joint_vel: np.ndarray
+    base_pos: np.ndarray
+    base_quat: np.ndarray
+    total_num_frames: int
+
+
+def load_motion_data(motion_file: str, robot_joint_names: list[str], target_framerate: float) -> MotionData:
+    motion_data = np.load(motion_file, allow_pickle=True)
+    framerate = motion_data["framerate"].item()
+
+    motion_joint_names_all = motion_data["joint_names"].tolist()
+    motion_joint_to_robot_joint_ids = [motion_joint_names_all.index(j_name) for j_name in robot_joint_names]
+
+    joint_pos = motion_data["joint_pos"][:, motion_joint_to_robot_joint_ids]
+    joint_pos_ = np.concatenate([joint_pos[0:1], joint_pos])
+    joint_vel = (joint_pos_[1:] - joint_pos_[:-1]) * framerate
+    base_pos = motion_data["base_pos_w"]
+    base_quat = motion_data["base_quat_w"]
+    total_num_frames = motion_data["joint_pos"].shape[0]
+
+    motion = MotionData(
+        framerate=framerate,
+        joint_pos=joint_pos,
+        joint_vel=joint_vel,
+        base_pos=base_pos,
+        base_quat=base_quat,
+        total_num_frames=total_num_frames,
+    )
+
+    return match_framerate(motion, target_framerate)
+
+
+def match_framerate(motion_data: MotionData, target_framerate: float) -> MotionData:
+    if motion_data.framerate == target_framerate:
+        return motion_data
+
+    motion_length_s = motion_data.total_num_frames / motion_data.framerate
+    new_total_num_frames = math.floor(motion_length_s * target_framerate)
+    new_frame_idxs = np.linspace(0, motion_data.total_num_frames - 1, new_total_num_frames)
+    floor = np.floor(new_frame_idxs).astype(int)
+    ceil = np.ceil(new_frame_idxs).astype(int)
+    frac = new_frame_idxs - floor
+
+    new_joint_pos = (1 - frac)[:, None] * motion_data.joint_pos[floor] + frac[:, None] * motion_data.joint_pos[ceil]
+    joint_pos_ = np.concatenate([new_joint_pos[0:1], new_joint_pos])
+    new_joint_vel = (joint_pos_[1:] - joint_pos_[:-1]) * target_framerate
+    new_base_pos = (1 - frac)[:, None] * motion_data.base_pos[floor] + frac[:, None] * motion_data.base_pos[ceil]
+    new_base_quat = quat_slerp_batch(motion_data.base_quat[floor], motion_data.base_quat[ceil], frac)
+
+    return MotionData(
+        framerate=target_framerate,
+        joint_pos=new_joint_pos.astype(np.float32),
+        joint_vel=new_joint_vel.astype(np.float32),
+        base_pos=new_base_pos.astype(np.float32),
+        base_quat=new_base_quat.astype(np.float32),
+        total_num_frames=new_total_num_frames,
+    )
+
+
 class TrackerAgent(OnboardAgent):
     """Different from ShadowingAgent, this agent reads the motion file directly and does not listen from the
     motion sequence topic. And we assume the network is just a MLP.
@@ -33,17 +98,17 @@ class TrackerAgent(OnboardAgent):
     def __init__(
         self,
         logdir: str,
-        motion_file: str,  # retargetted motion file
+        motion_file_dir: str,  # retargetted motion file
         ros_node: Ros2Real,
         target_motion_framerate: float = 50.0,
     ):
         super().__init__(logdir, ros_node)
         self.target_motion_framerate = target_motion_framerate
-        self.ort_sessions = dict()
+        self.ort_sessions: dict[str, ort.InferenceSession] = dict()
         self._parse_obs_config()
         self._parse_action_config()
         self._load_models()
-        self._load_motion(motion_file)
+        self._load_all_motions(motion_file_dir)
 
     def _load_models(self):
         """Load the ONNX model for the agent."""
@@ -56,25 +121,18 @@ class TrackerAgent(OnboardAgent):
         normalizer_path = os.path.join(self.logdir, "exported", "policy_normalizer.npz")
         self.normalizer = Normalizer(load_path=normalizer_path)
 
-    def _load_motion(self, motion_file: str):
+    def _load_all_motions(self, motion_file_dir: str):
         """Load the motion file."""
-        self.motion_data = np.load(motion_file, allow_pickle=True)
-        self.motion_framerate = self.motion_data["framerate"].item()
-
-        # get the motion joint names and convert to robot joint names
-        motion_joint_names = self.motion_data["joint_names"].tolist()
-        robot_joint_names = self.ros_node.sim_joint_names
-        motion_joint_to_robot_joint_ids = [motion_joint_names.index(j_name) for j_name in robot_joint_names]
-
-        self.motion_joint_names = [motion_joint_names[i] for i in motion_joint_to_robot_joint_ids]
-        self.motion_joint_pos = self.motion_data["joint_pos"][:, motion_joint_to_robot_joint_ids]
-        joint_pos_ = np.concatenate([self.motion_joint_pos[0:1], self.motion_joint_pos])
-        self.motion_joint_vel = (joint_pos_[1:] - joint_pos_[:-1]) * self.motion_framerate
-        self.motion_base_pos = self.motion_data["base_pos_w"]
-        self.motion_base_quat = self.motion_data["base_quat_w"]
-        self.motion_total_num_frames = self.motion_data["joint_pos"].shape[0]
-
-        self.match_motion_to_target_framerate()
+        self.all_motion_datas: dict[str, MotionData] = dict()
+        for motion_file in os.listdir(motion_file_dir):
+            motion = load_motion_data(
+                os.path.join(motion_file_dir, motion_file), self.ros_node.sim_joint_names, self.target_motion_framerate
+            )
+            self.all_motion_datas[motion_file] = motion
+        self.motion_data = list(self.all_motion_datas.values())[
+            0
+        ]  # put the first motion in the dictionary as the default motion
+        self.ros_node.get_logger().info(f"Loaded {len(self.all_motion_datas)} motions from {motion_file_dir}.")
 
         # prepare the frame indices (offset w.r.t current cursor)
         self.motion_num_frames = self.cfg["scene"]["motion_reference"][
@@ -84,20 +142,25 @@ class TrackerAgent(OnboardAgent):
         if self.cfg["scene"]["motion_reference"]["data_start_from"] == "one_frame_interval":
             self.motion_frame_indices_offset += 1
         self.motion_frame_indices_offset *= (
-            self.cfg["scene"]["motion_reference"]["frame_interval_s"] * self.motion_framerate
+            self.cfg["scene"]["motion_reference"]["frame_interval_s"] * self.target_motion_framerate
         )
         self.motion_frame_indices_offset = self.motion_frame_indices_offset.astype(int)
 
         self.motion_cursor_idx = 0
 
-    def reset(self):
+    def reset(self, motion_name: str = None):
         """Reset the agent state and the rosbag reader."""
         super().reset()
+        if motion_name is None:
+            motion_name = list(self.all_motion_datas.keys())[0]
+        self.motion_data = self.all_motion_datas[motion_name]
+        self.match_to_current_heading()
+        self.ros_node.get_logger().info(f"Reference motion {motion_name} matched to current heading.")
         self.motion_cursor_idx = 0
 
     def get_done(self):
         """Get the done flag."""
-        return (self.motion_cursor_idx + self.motion_frame_indices_offset[-1]) >= self.motion_total_num_frames - 1
+        return (self.motion_cursor_idx + self.motion_frame_indices_offset[-1]) >= self.motion_data.total_num_frames - 1
 
     def step(self):
         """Perform a single step of the agent."""
@@ -105,8 +168,8 @@ class TrackerAgent(OnboardAgent):
         done = self.get_done()
         self.motion_cursor_idx = (
             self.motion_cursor_idx
-            if self.motion_cursor_idx < self.motion_total_num_frames
-            else self.motion_total_num_frames - 1
+            if self.motion_cursor_idx < self.motion_data.total_num_frames
+            else self.motion_data.total_num_frames - 1
         )
         obs = self._get_observation()
         normalized_obs = self.normalizer.normalize(obs).astype(np.float32)[None, :]
@@ -118,56 +181,23 @@ class TrackerAgent(OnboardAgent):
     def match_to_current_heading(self):
         """Match the motion's 0-th frame to the current heading."""
         root_quat_w = quaternion.from_float_array(self.ros_node._get_quat_w_obs())  # (,) quaternion
-        quat_w_ref = quaternion.from_float_array(self.motion_base_quat[0])  # (,) quaternion
+        quat_w_ref = quaternion.from_float_array(self.motion_data.base_quat[0])  # (,) quaternion
         quat_err = root_quat_w * inv_quat(quat_w_ref)  # (,) quaternion
         heading_err_quat = yaw_quat(quat_err)  # (,) quaternion
-        heading_err_quat_ = np.stack([heading_err_quat for _ in range(len(self.motion_base_quat))], axis=0)  # (N, 4)
+        heading_err_quat_ = np.stack(
+            [heading_err_quat for _ in range(len(self.motion_data.base_quat))], axis=0
+        )  # (N, 4)
 
         # update the base_quat_w for each frame
-        motion_quats = quaternion.from_float_array(self.motion_base_quat)  # (N,) quaternion
+        motion_quats = quaternion.from_float_array(self.motion_data.base_quat)  # (N,) quaternion
         updated_quats = heading_err_quat_ * motion_quats  # broadcasts to (N,)
-        self.motion_base_quat = quaternion.as_float_array(updated_quats)  # (N, 4)
+        self.motion_data.base_quat = quaternion.as_float_array(updated_quats)  # (N, 4)
 
         # update the base_pos_w for each frame
-        current_pos_w = self.motion_base_pos[0]  # (3,)
-        rel_pos = self.motion_base_pos - self.motion_base_pos[0:1]  # (N, 3)
+        current_pos_w = self.motion_data.base_pos[0]  # (3,)
+        rel_pos = self.motion_data.base_pos - self.motion_data.base_pos[0:1]  # (N, 3)
         rotated_rel_pos = quaternion.rotate_vectors(heading_err_quat, rel_pos)  # (N, 3)
-        self.motion_base_pos = rotated_rel_pos + current_pos_w[None, :]  # (N, 3)
-
-    def match_motion_to_target_framerate(self):
-        """Match the motion framerate to the target framerate by interpolating the motion data."""
-        if self.motion_framerate == self.target_motion_framerate:
-            return
-        self.ros_node.get_logger().info(
-            f"Matching motion framerate from {self.motion_framerate} to {self.target_motion_framerate}."
-        )
-        motion_length_s = self.motion_total_num_frames / self.motion_framerate
-        new_motion_total_num_frames = math.floor(motion_length_s * self.target_motion_framerate)
-        new_motion_frame_idxs = np.linspace(0, self.motion_total_num_frames - 1, new_motion_total_num_frames)
-        new_motion_frame_idxs_floor = np.floor(new_motion_frame_idxs).astype(int)
-        new_motion_frame_idxs_ceil = np.ceil(new_motion_frame_idxs).astype(int)
-        new_motion_frame_idxs_frac = new_motion_frame_idxs - new_motion_frame_idxs_floor
-        # acquire the interpolated data
-        new_joint_pos = (1 - new_motion_frame_idxs_frac)[:, None] * self.motion_joint_pos[
-            new_motion_frame_idxs_floor
-        ] + new_motion_frame_idxs_frac[:, None] * self.motion_joint_pos[new_motion_frame_idxs_ceil]
-        joint_pos_ = np.concatenate([new_joint_pos[0:1], new_joint_pos])
-        new_motion_joint_vel = (joint_pos_[1:] - joint_pos_[:-1]) * self.target_motion_framerate
-        new_motion_base_pos = (1 - new_motion_frame_idxs_frac)[:, None] * self.motion_base_pos[
-            new_motion_frame_idxs_floor
-        ] + new_motion_frame_idxs_frac[:, None] * self.motion_base_pos[new_motion_frame_idxs_ceil]
-        new_motion_base_quat = quat_slerp_batch(
-            self.motion_base_quat[new_motion_frame_idxs_floor],
-            self.motion_base_quat[new_motion_frame_idxs_ceil],
-            new_motion_frame_idxs_frac,
-        )
-        # update the motion data
-        self.motion_framerate = self.target_motion_framerate
-        self.motion_total_num_frames = new_motion_total_num_frames
-        self.motion_joint_pos = new_joint_pos.astype(np.float32)
-        self.motion_joint_vel = new_motion_joint_vel.astype(np.float32)
-        self.motion_base_pos = new_motion_base_pos.astype(np.float32)
-        self.motion_base_quat = new_motion_base_quat.astype(np.float32)
+        self.motion_data.base_pos = rotated_rel_pos + current_pos_w[None, :]  # (N, 3)
 
     """
     Agent specific observation functions for TrackerAgent.
@@ -175,21 +205,21 @@ class TrackerAgent(OnboardAgent):
 
     def _get_joint_pos_ref_command_cmd_obs(self):
         frame_indices = self.motion_frame_indices_offset + self.motion_cursor_idx
-        frame_indices = frame_indices.clip(max=self.motion_total_num_frames - 1)
-        return self.motion_joint_pos[frame_indices] - self.default_joint_pos[None, :]
+        frame_indices = frame_indices.clip(max=self.motion_data.total_num_frames - 1)
+        return self.motion_data.joint_pos[frame_indices] - self.default_joint_pos[None, :]
 
     def _get_joint_vel_ref_command_cmd_obs(self):
         frame_indices = self.motion_frame_indices_offset + self.motion_cursor_idx
-        frame_indices = frame_indices.clip(max=self.motion_total_num_frames - 1)
-        return self.motion_joint_vel[frame_indices]
+        frame_indices = frame_indices.clip(max=self.motion_data.total_num_frames - 1)
+        return self.motion_data.joint_vel[frame_indices]
 
     def _get_position_b_ref_command_cmd_obs(self):
         """Return the future position reference in current motion reference's base frame."""
         frame_indices = self.motion_frame_indices_offset + self.motion_cursor_idx
-        frame_indices = frame_indices.clip(max=self.motion_total_num_frames - 1)
-        current_motion_base_pos = self.motion_base_pos[self.motion_cursor_idx : self.motion_cursor_idx + 1]
-        current_motion_base_quat = self.motion_base_quat[self.motion_cursor_idx]  # (4,)
-        future_motion_base_pos = self.motion_base_pos[frame_indices]
+        frame_indices = frame_indices.clip(max=self.motion_data.total_num_frames - 1)
+        current_motion_base_pos = self.motion_data.base_pos[self.motion_cursor_idx : self.motion_cursor_idx + 1]
+        current_motion_base_quat = self.motion_data.base_quat[self.motion_cursor_idx]  # (4,)
+        future_motion_base_pos = self.motion_data.base_pos[frame_indices]
         future_motion_base_pos_b = quat_rotate_inverse(
             quaternion.from_float_array(current_motion_base_quat), future_motion_base_pos - current_motion_base_pos
         )
@@ -200,9 +230,9 @@ class TrackerAgent(OnboardAgent):
         Return the future rotation reference in current robot's base frame.
         """
         frame_indices = self.motion_frame_indices_offset + self.motion_cursor_idx
-        frame_indices = frame_indices.clip(max=self.motion_total_num_frames - 1)
+        frame_indices = frame_indices.clip(max=self.motion_data.total_num_frames - 1)
         current_robot_base_quat = self.ros_node._get_quat_w_obs()[None, :]  # (1, 4)
-        future_motion_base_quat = self.motion_base_quat[frame_indices]
+        future_motion_base_quat = self.motion_data.base_quat[frame_indices]
         future_motion_base_quat_b = inv_quat(
             quaternion.from_float_array(current_robot_base_quat)
         ) * quaternion.from_float_array(future_motion_base_quat)
@@ -210,7 +240,7 @@ class TrackerAgent(OnboardAgent):
 
     def get_cold_start_agent(self, startup_step_size: float = 0.2, kpkd_factor: float = 1.0) -> ColdStartAgent:
         """Create a ColdStartAgent with joint_target_pos set to the 0-th frame of the motion."""
-        joint_target_pos = self.motion_joint_pos[0].copy()
+        joint_target_pos = self.motion_data.joint_pos[0].copy()
         return ColdStartAgent(
             startup_step_size=startup_step_size,
             ros_node=self.ros_node,
@@ -299,8 +329,8 @@ class PerceptiveTrackerAgent(TrackerAgent):
             self.depth_image_gaussian_blur_kernel_size = None
             self.depth_image_gaussian_blur_sigma = None
 
-    def reset(self):
-        super().reset()
+    def reset(self, *args, **kwargs):
+        super().reset(*args, **kwargs)
         if not hasattr(self, "depth_image_slice"):
             self.depth_image_slice = self._get_obs_slice("depth_image")
 
@@ -309,8 +339,8 @@ class PerceptiveTrackerAgent(TrackerAgent):
         done = self.get_done()
         self.motion_cursor_idx = (
             self.motion_cursor_idx
-            if self.motion_cursor_idx < self.motion_total_num_frames
-            else self.motion_total_num_frames - 1
+            if self.motion_cursor_idx < self.motion_data.total_num_frames
+            else self.motion_data.total_num_frames - 1
         )
         obs = self._get_observation()
         normalized_obs = self.normalizer.normalize(obs).astype(np.float32)[None, :]
