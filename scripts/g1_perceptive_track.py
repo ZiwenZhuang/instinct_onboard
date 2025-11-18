@@ -93,7 +93,7 @@ class G1TrackingNode(RsCameraNode):
             elif self.joy_stick_buffer.keys & WirelessButtons.down:
                 self.get_logger().info("down button pressed, switching to tracking agent.")
                 self.current_agent_name = "tracking"
-                self.available_agents[self.current_agent_name].reset("highjump21-ziwen-retargeted.npz")
+                self.available_agents[self.current_agent_name].reset("kneelClimbStep1-x-0.1-ziwen-retargeted.npz")
             elif self.joy_stick_buffer.keys & WirelessButtons.left:
                 self.get_logger().info("left button pressed, switching to tracking agent.")
                 self.current_agent_name = "tracking"
