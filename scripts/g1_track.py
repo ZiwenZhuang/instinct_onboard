@@ -81,21 +81,21 @@ class G1TrackingNode(Ros2Real):
                 sys.exit(0)
 
     def vis_callback(self):
-        agent = self.available_agents["tracking"]
+        agent: TrackerAgent = self.available_agents["tracking"]
         cursor = agent.motion_cursor_idx
         # Publish JointState for target joints
         js = JointState()
         js.header.stamp = self.get_clock().now().to_msg()
-        js.name = agent.motion_joint_names
-        joint_pos = agent.motion_joint_pos[cursor]
-        joint_vel = agent.motion_joint_vel[cursor]
+        js.name = self.sim_joint_names
+        joint_pos = agent.motion_data.joint_pos[cursor]
+        joint_vel = agent.motion_data.joint_vel[cursor]
         js.position = joint_pos.tolist()
         js.velocity = joint_vel.tolist()
         js.effort = [0.0] * len(joint_pos)
         self.joint_state_publisher.publish(js)
         # Broadcast TF for target base
-        pos = agent.motion_base_pos[cursor]
-        quat = agent.motion_base_quat[cursor]
+        pos = agent.motion_data.base_pos[cursor]
+        quat = agent.motion_data.base_quat[cursor]
         t = TransformStamped()
         t.header.stamp = js.header.stamp
         t.header.frame_id = "world"
@@ -119,7 +119,7 @@ def main(args):
 
     tracking_agent = TrackerAgent(
         logdir=args.logdir,
-        motion_file=args.motion_file,
+        motion_file_dir=args.motion_dir,
         ros_node=node,
     )
     cold_start_agent = tracking_agent.get_cold_start_agent(args.startup_step_size, args.kpkd_factor)
@@ -149,7 +149,7 @@ if __name__ == "__main__":
         help="Directory to load the agent from",
     )
     parser.add_argument(
-        "--motion_file",
+        "--motion_dir",
         type=str,
         help="Path to the motion file",
     )
