@@ -7,7 +7,7 @@ import onnxruntime as ort
 
 from instinct_onboard.agents.base import OnboardAgent
 from instinct_onboard.normalizer import Normalizer
-from instinct_onboard.ros_nodes.ros_real import Ros2Real
+from instinct_onboard.ros_nodes.base import RealNode
 
 
 class WalkAgent(OnboardAgent):
@@ -16,7 +16,7 @@ class WalkAgent(OnboardAgent):
     def __init__(
         self,
         logdir: str,
-        ros_node: Ros2Real,
+        ros_node: RealNode,
         x_vel_scale: float = 0.5,
         y_vel_scale: float = 0.5,
         yaw_vel_scale: float = 1.0,

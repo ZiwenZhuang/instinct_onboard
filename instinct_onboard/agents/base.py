@@ -7,7 +7,7 @@ from typing import Callable, Tuple
 import numpy as np
 import yaml
 
-from instinct_onboard.ros_nodes.ros_real import Ros2Real
+from instinct_onboard.ros_nodes.base import RealNode
 from instinct_onboard.utils import CircularBuffer
 
 
@@ -17,15 +17,15 @@ class OnboardAgent(ABC):
     the interaction with the robot and the ONNX model.
     """
 
-    def __init__(self, logdir: str, ros_node: Ros2Real):
+    def __init__(self, logdir: str, ros_node: RealNode):
         """Initialize the agent with the log directory and ROS node.
         Args:
             logdir (str): The directory where the agent data is stored.
             ros_node (Ros2Real): The ROS node instance to interact with the robot.
         """
         self.logdir = logdir
-        self.ros_node: Ros2Real = ros_node
-        assert isinstance(self.ros_node, Ros2Real), "ros_node must be an instance of Ros2Real"
+        self.ros_node: RealNode = ros_node
+        assert isinstance(self.ros_node, RealNode), "ros_node must be an instance of RealNode"
         env_yaml = os.path.join(self.logdir, "params", "env.yaml")
         with open(env_yaml) as f:
             self.cfg = yaml.unsafe_load(f)
@@ -258,7 +258,7 @@ class ColdStartAgent(OnboardAgent):
     def __init__(
         self,
         startup_step_size: float,
-        ros_node: Ros2Real,
+        ros_node: RealNode,
         joint_target_pos: np.array = None,
         action_scale: np.array = None,
         action_offset: np.array = None,
@@ -268,7 +268,7 @@ class ColdStartAgent(OnboardAgent):
         """Initialize the cold start agent.
         Args:
             startup_step_size (float): The step size for the cold start agent to move the joints.
-            ros_node (Ros2Real): The ROS node instance to interact with the robot.
+            ros_node (RealNode): The ROS node instance to interact with the robot.
             action_scale:
             action_offset: Due to the last_action sharing mechanism, it is sometimes needed to specify the
                 action scale and action offset in the cold-start agent.

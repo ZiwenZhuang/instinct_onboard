@@ -12,12 +12,10 @@ from instinct_onboard.agents.base import ColdStartAgent
 from instinct_onboard.agents.tracking_agent import PerceptiveTrackerAgent, TrackerAgent
 from instinct_onboard.agents.walk_agent import WalkAgent
 from instinct_onboard.robot_cfgs import WirelessButtons
-
-# from instinct_onboard.ros_nodes.ros_real import Ros2Real
-from instinct_onboard.ros_nodes.realsense import RsCameraNode
+from instinct_onboard.ros_nodes.realsense import UnitreeRsCameraNode
 
 
-class G1TrackingNode(RsCameraNode):
+class G1TrackingNode(UnitreeRsCameraNode):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.available_agents = dict()
@@ -165,6 +163,7 @@ def main(args):
         rs_resolution=(480, 270),  # (width, height)
         rs_fps=60,
         camera_individual_process=True,
+        robot_class_name="G1_29Dof",
         dryrun=not args.nodryrun,
     )
 

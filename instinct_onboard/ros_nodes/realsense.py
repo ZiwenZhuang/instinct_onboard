@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import multiprocessing as mp
 import time
 from typing import Tuple
@@ -6,11 +8,11 @@ import cv2
 import numpy as np
 import pyrealsense2 as rs
 
-from .ros_real import Ros2Real
+from .unitree import UnitreeNode
 
 
 class RealSenseCamera:
-    def __init__(self, resolution: Tuple[int, int], fps: int):
+    def __init__(self, resolution: tuple[int, int], fps: int):
         self.resolution = resolution  # (width, height)
         self.fps = fps
         self.pipeline = rs.pipeline()
@@ -80,10 +82,10 @@ class RsCameraNodeMixin:
     def __init__(
         self,
         *args,
-        rs_resolution: Tuple[int, int] = (480, 270),  # (width, height)
+        rs_resolution: tuple[int, int] = (480, 270),  # (width, height)
         rs_fps: int = 60,
         camera_individual_process: bool = False,
-        **kwargs
+        **kwargs,
     ):
         super().__init__(*args, **kwargs)
         # Add any depth-specific initialization here
@@ -157,5 +159,5 @@ class RsCameraNodeMixin:
         super().destroy_node()
 
 
-class RsCameraNode(RsCameraNodeMixin, Ros2Real):
+class UnitreeRsCameraNode(RsCameraNodeMixin, UnitreeNode):
     pass

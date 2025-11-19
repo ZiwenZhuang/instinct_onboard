@@ -16,7 +16,7 @@ from tf2_ros import StaticTransformBroadcaster
 
 from instinct_onboard.agents.base import ColdStartAgent, OnboardAgent
 from instinct_onboard.normalizer import Normalizer
-from instinct_onboard.ros_nodes.ros_real import Ros2Real
+from instinct_onboard.ros_nodes.base import RealNode
 from instinct_onboard.utils import (
     inv_quat,
     quat_rotate_inverse,
@@ -99,7 +99,7 @@ class TrackerAgent(OnboardAgent):
         self,
         logdir: str,
         motion_file_dir: str,  # retargetted motion file
-        ros_node: Ros2Real,
+        ros_node: RealNode,
         target_motion_framerate: float = 50.0,
     ):
         super().__init__(logdir, ros_node)

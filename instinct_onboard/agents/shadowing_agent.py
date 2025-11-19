@@ -10,7 +10,7 @@ import yaml
 from geometry_msgs.msg import PoseArray
 
 from instinct_onboard.agents.base import OnboardAgent
-from instinct_onboard.ros_nodes.ros_real import Ros2Real
+from instinct_onboard.ros_nodes.base import RealNode
 from instinct_onboard.utils import quat_to_tan_norm_batch
 from motion_target_msgs.msg import MotionSequence
 
@@ -19,7 +19,7 @@ class ShadowingAgent(OnboardAgent):
     def __init__(
         self,
         logdir: str,
-        ros_node: Ros2Real,
+        ros_node: RealNode,
     ):
         super().__init__(logdir, ros_node)
         self.ort_sessions = dict()
@@ -246,7 +246,7 @@ class MotionAsActAgent(OnboardAgent):
     def __init__(
         self,
         logdir: str,
-        ros_node: Ros2Real,
+        ros_node: RealNode,
         joint_diff_threshold: float = 0.2,
         joint_diff_scale: float = 0.2,
     ):

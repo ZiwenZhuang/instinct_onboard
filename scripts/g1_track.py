@@ -11,10 +11,10 @@ from tf2_ros import TransformBroadcaster
 from instinct_onboard.agents.base import ColdStartAgent
 from instinct_onboard.agents.tracking_agent import TrackerAgent
 from instinct_onboard.robot_cfgs import WirelessButtons
-from instinct_onboard.ros_nodes.ros_real import Ros2Real
+from instinct_onboard.ros_nodes.unitree import UnitreeNode
 
 
-class G1TrackingNode(Ros2Real):
+class G1TrackingNode(UnitreeNode):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.available_agents = dict()
@@ -114,6 +114,7 @@ def main(args):
     rclpy.init()
 
     node = G1TrackingNode(
+        robot_class_name="G1_29Dof",
         dryrun=not args.nodryrun,
     )
 
