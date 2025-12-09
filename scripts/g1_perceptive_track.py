@@ -100,6 +100,10 @@ class G1TrackingNode(UnitreeRsCameraNode):
                 self.get_logger().info("right button pressed, switching to tracking agent.")
                 self.current_agent_name = "tracking"
                 self.available_agents[self.current_agent_name].reset("jumpsit2-ziwen-retargeted.npz")
+            elif self.joy_stick_buffer.keys & WirelessButtons.X:
+                self.get_logger().info("right button pressed, switching to tracking agent.")
+                self.current_agent_name = "tracking"
+                self.available_agents[self.current_agent_name].reset("superheroLanding-retargeted.npz")
 
         elif self.current_agent_name == "tracking":
             action, done = self.available_agents[self.current_agent_name].step()
