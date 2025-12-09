@@ -33,6 +33,8 @@ class G1TrackingNode(UnitreeRsCameraNode):
         main_loop_duration = 0.02
         self.get_logger().info(f"Starting main loop with duration: {main_loop_duration} seconds.")
         self.main_loop_timer = self.create_timer(main_loop_duration, self.main_loop_callback)
+        self.main_loop_timer_counter: int = 0  # counter for the main loop timer to assess the actual frequency
+        self.main_loop_timer_counter_time = self.get_clock().now()
         # start the visualization timer with 100ms duration
         vis_duration = 0.1
         self.vis_timer = self.create_timer(vis_duration, self.vis_callback)
@@ -130,6 +132,15 @@ class G1TrackingNode(UnitreeRsCameraNode):
                 self._turn_off_motors()
                 sys.exit(0)
 
+        # count the main loop timer counter and log the actual frequency every 500 counts
+        self.main_loop_timer_counter += 1
+        if self.main_loop_timer_counter % 500 == 0:
+            self.get_logger().info(
+                f"Actual main loop frequency: {500 / ((self.get_clock().now() - self.main_loop_timer_counter_time).nanoseconds / 1e9):.2f} Hz."
+            )
+            self.main_loop_timer_counter = 0
+            self.main_loop_timer_counter_time = self.get_clock().now()
+
     def vis_callback(self):
         agent: PerceptiveTrackerAgent = self.available_agents["tracking"]
         cursor = agent.motion_cursor_idx
@@ -167,6 +178,7 @@ def main(args):
         rs_resolution=(480, 270),  # (width, height)
         rs_fps=60,
         camera_individual_process=True,
+        joint_pos_protect_ratio=2.0,
         robot_class_name="G1_29Dof",
         dryrun=not args.nodryrun,
     )
