@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import multiprocessing as mp
+import os
 import time
 from typing import Tuple
 
@@ -60,7 +61,8 @@ class RealSenseCamera:
         return depth_np
 
 
-def camera_process_func(resolution, fps, request_queue, result_queue):
+def camera_process_func(resolution, fps, request_queue, result_queue, camera_process_affinity):
+    os.sched_setaffinity(os.getpid(), camera_process_affinity)
     camera = RealSenseCamera(resolution, fps)
     while True:
         depth_data = camera.get_camera_data()
@@ -85,6 +87,13 @@ class RsCameraNodeMixin:
         rs_resolution: tuple[int, int] = (480, 270),  # (width, height)
         rs_fps: int = 60,
         camera_individual_process: bool = False,
+        main_process_affinity: set[int] = {
+            0,
+            1,
+            2,
+            3,
+        },  # NOTE: These two affinity sets are only used when camera_individual_process is True
+        camera_process_affinity: set[int] = {4},
         **kwargs,
     ):
         super().__init__(*args, **kwargs)
@@ -92,6 +101,8 @@ class RsCameraNodeMixin:
         self.rs_resolution = rs_resolution
         self.rs_fps = rs_fps
         self.camera_individual_process = camera_individual_process
+        self.main_process_affinity = main_process_affinity
+        self.camera_process_affinity = camera_process_affinity
         self.camera = None
         self.camera_process = None
         self.request_queue = None
@@ -105,9 +116,16 @@ class RsCameraNodeMixin:
             self.result_queue = mp.Queue()
             self.camera_process = mp.Process(
                 target=camera_process_func,
-                args=(self.rs_resolution, self.rs_fps, self.request_queue, self.result_queue),
+                args=(
+                    self.rs_resolution,
+                    self.rs_fps,
+                    self.request_queue,
+                    self.result_queue,
+                    self.camera_process_affinity,
+                ),
             )
             self.camera_process.start()
+            os.sched_setaffinity(os.getpid(), self.main_process_affinity)
             # We don't set self.camera, as it's in another process
             # Get depth_scale by requesting a frame or separately
             temp_depth = (
