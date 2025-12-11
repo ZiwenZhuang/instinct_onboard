@@ -16,10 +16,11 @@ from instinct_onboard.ros_nodes.realsense import UnitreeRsCameraNode
 
 
 class G1TrackingNode(UnitreeRsCameraNode):
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, motion_vis: bool = False, **kwargs):
         super().__init__(*args, **kwargs)
         self.available_agents = dict()
         self.current_agent_name: str | None = None
+        self.motion_vis = motion_vis
 
     def register_agent(self, name: str, agent):
         self.available_agents[name] = agent
@@ -37,7 +38,8 @@ class G1TrackingNode(UnitreeRsCameraNode):
         self.main_loop_timer_counter_time = self.get_clock().now()
         # start the visualization timer with 100ms duration
         vis_duration = 0.1
-        self.vis_timer = self.create_timer(vis_duration, self.vis_callback)
+        if self.motion_vis:
+            self.vis_timer = self.create_timer(vis_duration, self.vis_callback)
 
     def main_loop_callback(self):
         if self.current_agent_name is None:
@@ -180,6 +182,7 @@ def main(args):
         camera_individual_process=True,
         joint_pos_protect_ratio=2.0,
         robot_class_name="G1_29Dof",
+        motion_vis=args.motion_vis,
         dryrun=not args.nodryrun,
     )
 
@@ -260,6 +263,12 @@ if __name__ == "__main__":
         type=float,
         default=2.0,
         help="KPKD factor for the cold start agent (default: 2.0)",
+    )
+    parser.add_argument(
+        "--motion_vis",
+        action="store_true",
+        default=False,
+        help="Visualize the motion sequence by publishing motion sequence as joint state, need robot state publisher to visuzlize the robot model (default: False)",
     )
     parser.add_argument(
         "--depth_vis",
