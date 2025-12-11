@@ -42,27 +42,28 @@ class RealSenseCamera:
         depth_frame = frames.get_depth_frame()
         return depth_frame
 
-    def get_camera_data(self) -> np.ndarray or None:
+    def get_camera_data(self) -> np.array or None:
         depth_frame = self.get_frame()
         if depth_frame is None:
             return None
-        depth_data = self.apply_opencv_filters(depth_frame)
-        return depth_data  # (height, width)
+        depth_data = np.asanyarray(depth_frame.get_data(), dtype=np.float32) * self.depth_scale
+        depth_data = self.apply_opencv_filters(depth_data)
+        return depth_data
 
     def build_opencv_filters(self):
         """Build the OpenCV filters."""
         assert cv2.cuda.getCudaEnabledDeviceCount() > 0, "CUDA must be available for OpenCV to use GPU acceleration."
 
-    def apply_opencv_filters(self, depth_frame: rs.depth_frame) -> np.ndarray:
+    def apply_opencv_filters(self, depth_np: np.ndarray) -> np.ndarray:
         """Apply the OpenCV filters to the depth image."""
-        depth_np = np.asanyarray(depth_frame.get_data(), dtype=np.float32) * self.depth_scale
         to_inpaint_mask = (depth_np < 0.2).astype(np.uint8)
         depth_np = cv2.inpaint(depth_np, to_inpaint_mask, 3, cv2.INPAINT_NS)
         return depth_np
 
 
 def camera_process_func(resolution, fps, request_queue, result_queue, camera_process_affinity):
-    os.sched_setaffinity(os.getpid(), camera_process_affinity)
+    if camera_process_affinity is not None:
+        os.sched_setaffinity(os.getpid(), camera_process_affinity)
     camera = RealSenseCamera(resolution, fps)
     while True:
         depth_data = camera.get_camera_data()
@@ -87,13 +88,8 @@ class RsCameraNodeMixin:
         rs_resolution: tuple[int, int] = (480, 270),  # (width, height)
         rs_fps: int = 60,
         camera_individual_process: bool = False,
-        main_process_affinity: set[int] = {
-            0,
-            1,
-            2,
-            3,
-        },  # NOTE: These two affinity sets are only used when camera_individual_process is True
-        camera_process_affinity: set[int] = {4},
+        main_process_affinity: set[int] | None = None,
+        camera_process_affinity: set[int] | None = None,
         **kwargs,
     ):
         super().__init__(*args, **kwargs)
@@ -125,7 +121,8 @@ class RsCameraNodeMixin:
                 ),
             )
             self.camera_process.start()
-            os.sched_setaffinity(os.getpid(), self.main_process_affinity)
+            if self.main_process_affinity is not None:
+                os.sched_setaffinity(os.getpid(), self.main_process_affinity)
             # We don't set self.camera, as it's in another process
             # Get depth_scale by requesting a frame or separately
             temp_depth = (
