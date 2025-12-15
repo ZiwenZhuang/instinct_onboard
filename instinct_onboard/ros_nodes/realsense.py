@@ -2,14 +2,16 @@ from __future__ import annotations
 
 import multiprocessing as mp
 import os
+import queue
 import time
-from typing import Tuple
 
 import cv2
 import numpy as np
 import pyrealsense2 as rs
 
 from .unitree import UnitreeNode
+
+REALSENSE_CALLBACK_FREQUENCY_CHECK_INTERVAL = 500
 
 
 class RealSenseCamera:
@@ -33,8 +35,6 @@ class RealSenseCamera:
         # I know what's going on, but when enabling rgb, this solves the problem.
         _ = self.pipeline.wait_for_frames(1000)  # 1000 ms
 
-        self.build_opencv_filters()
-
     def get_frame(self) -> rs.depth_frame or None:
         # read from pyrealsense2, preprocess and write the model embedding to the buffer
         timeout_ms = int(1000 / self.fps)  # ms
@@ -46,28 +46,25 @@ class RealSenseCamera:
         depth_frame = self.get_frame()
         if depth_frame is None:
             return None
+        # Apply Realsense Filters only if needed. Do not apply any OpenCV filters here.
+        # Leave to each of the agents to apply the filters, because it may be different for each agent.
         depth_data = np.asanyarray(depth_frame.get_data(), dtype=np.float32) * self.depth_scale
-        depth_data = self.apply_opencv_filters(depth_data)
         return depth_data
 
-    def build_opencv_filters(self):
-        """Build the OpenCV filters."""
-        assert cv2.cuda.getCudaEnabledDeviceCount() > 0, "CUDA must be available for OpenCV to use GPU acceleration."
 
-    def apply_opencv_filters(self, depth_np: np.ndarray) -> np.ndarray:
-        """Apply the OpenCV filters to the depth image."""
-        to_inpaint_mask = (depth_np < 0.2).astype(np.uint8)
-        depth_np = cv2.inpaint(depth_np, to_inpaint_mask, 3, cv2.INPAINT_NS)
-        return depth_np
-
-
-def camera_process_func(resolution, fps, request_queue, result_queue, camera_process_affinity):
+def camera_process_func(
+    resolution: tuple[int, int],
+    fps: int,
+    request_queue: mp.Queue,
+    result_queue: mp.Queue,
+    camera_process_affinity: set[int] | None,
+) -> None:
     if camera_process_affinity is not None:
         os.sched_setaffinity(os.getpid(), camera_process_affinity)
     camera = RealSenseCamera(resolution, fps)
     while True:
         depth_data = camera.get_camera_data()
-        result_queue.put(depth_data)
+        result_queue.put((time.time(), np.copy(depth_data)))
         try:
             signal = request_queue.get_nowait()
             if signal is None:
@@ -125,43 +122,69 @@ class RsCameraNodeMixin:
                 os.sched_setaffinity(os.getpid(), self.main_process_affinity)
             # We don't set self.camera, as it's in another process
             # Get depth_scale by requesting a frame or separately
-            temp_depth = (
-                self.get_rs_data()
-            )  # Dummy call to get scale, but actually scale is not fetched; need to adjust
-            self.rs_depth_scale = None  # TODO: Fetch depth_scale from process if needed
+            self.refresh_rs_data()  # Dummy call to refresh the depth data, but actually scale is not fetched; need to adjust
         else:
             self.camera = RealSenseCamera(
                 resolution=self.rs_resolution,
                 fps=self.rs_fps,
             )
-            self.rs_depth_scale = self.camera.depth_scale
 
     def start_ros_handlers(self):
         self.realsense_timer = self.create_timer(1.0 / self.rs_fps, self.realsense_callback)
+        if REALSENSE_CALLBACK_FREQUENCY_CHECK_INTERVAL > 1:
+            self.realsense_timer_counter = 0
+            self.realsense_timer_counter_time = time.time()
+            self.realsense_callback_time_consumptions = queue.Queue(maxsize=REALSENSE_CALLBACK_FREQUENCY_CHECK_INTERVAL)
         super().start_ros_handlers()
 
     def realsense_callback(self):
         """Callback to ensure the depth data is always updated.
         This is used to ensure the depth data is always updated, even if the camera is not publishing.
         """
-        self.rs_depth_data = self.get_rs_data()
+        realsense_callback_start_time = time.time()
+        refreshed = self.refresh_rs_data()
+        if REALSENSE_CALLBACK_FREQUENCY_CHECK_INTERVAL > 1:
+            self.realsense_callback_time_consumptions.put(time.time() - realsense_callback_start_time)
+            if refreshed:
+                self.realsense_timer_counter += 1
+            if self.realsense_timer_counter % REALSENSE_CALLBACK_FREQUENCY_CHECK_INTERVAL == 0:
+                time_consumptions = [
+                    self.realsense_callback_time_consumptions.get()
+                    for _ in range(REALSENSE_CALLBACK_FREQUENCY_CHECK_INTERVAL)
+                ]
+                self.get_logger().info(
+                    f"Actual realsense refreshed frequency: {(REALSENSE_CALLBACK_FREQUENCY_CHECK_INTERVAL / (time.time() - self.realsense_timer_counter_time)):.2f} Hz. Mean time consumption: {np.mean(time_consumptions):.4f} s."
+                )
+                self.realsense_timer_counter = 0
+                self.realsense_timer_counter_time = time.time()
 
-    def get_rs_data(self) -> np.ndarray or None:
+    def refresh_rs_data(self) -> bool:
+        """Currently refresh the depth data only."""
+        refreshed = False
         if self.camera_individual_process:
             if self.camera_process is None:
                 raise ValueError("Camera not initialized. Call initialize_camera first.")
             # Dump queue and get latest
-            latest = self.result_queue.get()  # Block until at least one
-            while not self.result_queue.empty():
+            if not hasattr(self, "rs_depth_data"):
+                rs_timestamp, self.rs_depth_data = self.result_queue.get()  # Block and wait for the first depth data
+                refreshed = True
+            while self.result_queue.qsize() > 0:
                 try:
-                    latest = self.result_queue.get_nowait()
+                    rs_timestamp, self.rs_depth_data = self.result_queue.get(timeout=0.01)
+                    refreshed = True
                 except mp.queues.Empty:
+                    print("Realsense depth data queue is empty. Breaking.")
                     break
-            return latest
+            self.get_logger().info(
+                f"Realsense depth data delayed: {(time.time() - rs_timestamp):.4f} s. queue size: {self.result_queue.qsize()}",
+                throttle_duration_sec=2.0,
+            )
         else:
             if self.camera is None:
                 raise ValueError("Camera not initialized. Call initialize_camera first.")
-            return self.camera.get_camera_data()  # (height, width)
+            self.rs_depth_data = self.camera.get_camera_data()  # (height, width)
+            refreshed = True
+        return refreshed
 
     def destroy_node(self):
         if self.camera_individual_process and self.camera_process:

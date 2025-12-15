@@ -40,7 +40,7 @@ class RsCamTestNode(RsCameraNodeMixin, Node):
         self.tf_broadcaster.sendTransform(t)
 
     def publish_callback(self):
-        depth_data = self.get_rs_data()
+        depth_data = self.refresh_rs_data()
         if depth_data is not None:
             # Publishing depth image may slow down the node, so it is only used in this script.
             depth_msg = self.create_image_msg(depth_data, "mono16")
