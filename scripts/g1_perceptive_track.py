@@ -1,5 +1,7 @@
 import os
+import queue
 import sys
+import time
 
 import numpy as np
 import rclpy
@@ -13,6 +15,8 @@ from instinct_onboard.agents.tracking_agent import PerceptiveTrackerAgent, Track
 from instinct_onboard.agents.walk_agent import WalkAgent
 from instinct_onboard.robot_cfgs import WirelessButtons
 from instinct_onboard.ros_nodes.realsense import UnitreeRsCameraNode
+
+MAIN_LOOP_FREQUENCY_CHECK_INTERVAL = 500
 
 
 class G1TrackingNode(UnitreeRsCameraNode):
@@ -34,14 +38,17 @@ class G1TrackingNode(UnitreeRsCameraNode):
         main_loop_duration = 0.02
         self.get_logger().info(f"Starting main loop with duration: {main_loop_duration} seconds.")
         self.main_loop_timer = self.create_timer(main_loop_duration, self.main_loop_callback)
-        self.main_loop_timer_counter: int = 0  # counter for the main loop timer to assess the actual frequency
-        self.main_loop_timer_counter_time = self.get_clock().now()
+        if MAIN_LOOP_FREQUENCY_CHECK_INTERVAL > 1:
+            self.main_loop_timer_counter: int = 0  # counter for the main loop timer to assess the actual frequency
+            self.main_loop_timer_counter_time = time.time()
+            self.main_loop_callback_time_consumptions = queue.Queue(maxsize=MAIN_LOOP_FREQUENCY_CHECK_INTERVAL)
         # start the visualization timer with 100ms duration
         vis_duration = 0.1
         if self.motion_vis:
             self.vis_timer = self.create_timer(vis_duration, self.vis_callback)
 
     def main_loop_callback(self):
+        main_loop_callback_start_time = time.time()
         if self.current_agent_name is None:
             self.get_logger().info("Starting cold start agent automatically.")
             self.get_logger().info("Press 'A' button to match motion to current heading.", throttle_duration_sec=2.0)
@@ -135,13 +142,18 @@ class G1TrackingNode(UnitreeRsCameraNode):
                 sys.exit(0)
 
         # count the main loop timer counter and log the actual frequency every 500 counts
-        self.main_loop_timer_counter += 1
-        if self.main_loop_timer_counter % 500 == 0:
-            self.get_logger().info(
-                f"Actual main loop frequency: {500 / ((self.get_clock().now() - self.main_loop_timer_counter_time).nanoseconds / 1e9):.2f} Hz."
-            )
-            self.main_loop_timer_counter = 0
-            self.main_loop_timer_counter_time = self.get_clock().now()
+        if MAIN_LOOP_FREQUENCY_CHECK_INTERVAL > 1:
+            self.main_loop_callback_time_consumptions.put(time.time() - main_loop_callback_start_time)
+            self.main_loop_timer_counter += 1
+            if self.main_loop_timer_counter % MAIN_LOOP_FREQUENCY_CHECK_INTERVAL == 0:
+                time_consumptions = [
+                    self.main_loop_callback_time_consumptions.get() for _ in range(MAIN_LOOP_FREQUENCY_CHECK_INTERVAL)
+                ]
+                self.get_logger().info(
+                    f"Actual main loop frequency: {(MAIN_LOOP_FREQUENCY_CHECK_INTERVAL / (time.time() - self.main_loop_timer_counter_time)):.2f} Hz. Mean time consumption: {np.mean(time_consumptions):.4f} s."
+                )
+                self.main_loop_timer_counter = 0
+                self.main_loop_timer_counter_time = time.time()
 
     def vis_callback(self):
         agent: PerceptiveTrackerAgent = self.available_agents["tracking"]
