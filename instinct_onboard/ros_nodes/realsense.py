@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import ctypes
 import multiprocessing as mp
+import multiprocessing.shared_memory as mp_shm
 import os
 import queue
 import time
@@ -8,10 +10,24 @@ import time
 import cv2
 import numpy as np
 import pyrealsense2 as rs
+from rclpy.callback_groups import ReentrantCallbackGroup
 
 from .unitree import UnitreeNode
 
-REALSENSE_CALLBACK_FREQUENCY_CHECK_INTERVAL = 500
+REALSENSE_PROCESS_FREQUENCY_CHECK_INTERVAL = 500
+
+
+class MpSharedHeader(ctypes.Structure):
+    _fields_ = [
+        ("timestamp", ctypes.c_double),  # bytes: 8
+        ("writer_status", ctypes.c_uint32),  # bytes: 4, 0: idle, 1: writing
+        ("writer_termination_signal", ctypes.c_uint32),  # bytes: 4, 0: alive, 1: should terminate
+        ("_pad", ctypes.c_uint32 * 4),  # bytes: 16, pad to 32 bytes
+    ]
+
+
+SIZE_OF_MP_SHARED_HEADER = ctypes.sizeof(MpSharedHeader)  # bytes: 32
+assert SIZE_OF_MP_SHARED_HEADER == 32
 
 
 class RealSenseCamera:
@@ -55,22 +71,42 @@ class RealSenseCamera:
 def camera_process_func(
     resolution: tuple[int, int],
     fps: int,
-    request_queue: mp.Queue,
-    result_queue: mp.Queue,
+    shm_name: str,
     camera_process_affinity: set[int] | None,
 ) -> None:
     if camera_process_affinity is not None:
         os.sched_setaffinity(os.getpid(), camera_process_affinity)
     camera = RealSenseCamera(resolution, fps)
+    shared_memory = mp.shared_memory.SharedMemory(name=shm_name)
+    header = MpSharedHeader.from_buffer(shared_memory.buf)
+    image_buffer = np.ndarray(
+        resolution[::-1], dtype=np.float32, buffer=shared_memory.buf, offset=SIZE_OF_MP_SHARED_HEADER
+    )
+    camera_process_start_time = time.time()
+    camera_process_counter = 0
     while True:
-        depth_data = camera.get_camera_data()
-        result_queue.put((time.time(), np.copy(depth_data)))
-        try:
-            signal = request_queue.get_nowait()
-            if signal is None:
-                break
-        except mp.queues.Empty:
-            pass
+        camera_data = camera.get_camera_data()
+        # mark in header to start writing
+        header.writer_status = 1
+        # write the camera data to the shared memory
+        image_buffer[:] = camera_data
+        header.timestamp = time.time()
+        # mark in header to stop writing
+        header.writer_status = 0
+        # check if the writer termination signal is set
+        if header.writer_termination_signal == 1:
+            print("Writer termination signal set, exiting camera process.")
+            header = None
+            image_buffer = None
+            break
+        camera_process_counter += 1
+        if camera_process_counter % REALSENSE_PROCESS_FREQUENCY_CHECK_INTERVAL == 0:
+            print(
+                f"Realsense camera process running at {(camera_process_counter / (time.time() - camera_process_start_time)):.4f} Hz."
+            )
+            camera_process_counter = 0
+            camera_process_start_time = time.time()
+    shared_memory.close()  # unlink in the main process
 
 
 class RsCameraNodeMixin:
@@ -105,17 +141,30 @@ class RsCameraNodeMixin:
     def initialize_camera(self):
         """Initialize the RealSense camera with the specified configuration."""
         if self.camera_individual_process:
-            self.request_queue = mp.Queue()
-            self.result_queue = mp.Queue()
+            # self.rs_rgb_data = None # Todo: add rgb data support
+            self.rs_depth_data = np.zeros(self.rs_resolution[::-1], dtype=np.float32)
+            shm_size = (
+                SIZE_OF_MP_SHARED_HEADER
+                + np.prod(self.rs_resolution[::-1]) * np.dtype(self.rs_depth_data.dtype).itemsize
+            )
+            self.rs_shared_memory = mp_shm.SharedMemory(create=True, size=shm_size)
+            self.rs_shared_header = MpSharedHeader.from_buffer(self.rs_shared_memory.buf)
+            self.rs_image_buffer = np.ndarray(
+                self.rs_resolution[::-1],
+                dtype=np.float32,
+                buffer=self.rs_shared_memory.buf,
+                offset=SIZE_OF_MP_SHARED_HEADER,
+            )
+            self.rs_data_fresh_counter = 0
             self.camera_process = mp.Process(
                 target=camera_process_func,
                 args=(
                     self.rs_resolution,
                     self.rs_fps,
-                    self.request_queue,
-                    self.result_queue,
+                    self.rs_shared_memory.name,
                     self.camera_process_affinity,
                 ),
+                daemon=True,
             )
             self.camera_process.start()
             if self.main_process_affinity is not None:
@@ -129,56 +178,24 @@ class RsCameraNodeMixin:
                 fps=self.rs_fps,
             )
 
-    def start_ros_handlers(self):
-        self.realsense_timer = self.create_timer(1.0 / self.rs_fps, self.realsense_callback)
-        if REALSENSE_CALLBACK_FREQUENCY_CHECK_INTERVAL > 1:
-            self.realsense_timer_counter = 0
-            self.realsense_timer_counter_time = time.time()
-            self.realsense_callback_time_consumptions = queue.Queue(maxsize=REALSENSE_CALLBACK_FREQUENCY_CHECK_INTERVAL)
-        super().start_ros_handlers()
-
-    def realsense_callback(self):
-        """Callback to ensure the depth data is always updated.
-        This is used to ensure the depth data is always updated, even if the camera is not publishing.
-        """
-        realsense_callback_start_time = time.time()
-        refreshed = self.refresh_rs_data()
-        if REALSENSE_CALLBACK_FREQUENCY_CHECK_INTERVAL > 1:
-            self.realsense_callback_time_consumptions.put(time.time() - realsense_callback_start_time)
-            if refreshed:
-                self.realsense_timer_counter += 1
-            if self.realsense_timer_counter % REALSENSE_CALLBACK_FREQUENCY_CHECK_INTERVAL == 0:
-                time_consumptions = [
-                    self.realsense_callback_time_consumptions.get()
-                    for _ in range(REALSENSE_CALLBACK_FREQUENCY_CHECK_INTERVAL)
-                ]
-                self.get_logger().info(
-                    f"Actual realsense refreshed frequency: {(REALSENSE_CALLBACK_FREQUENCY_CHECK_INTERVAL / (time.time() - self.realsense_timer_counter_time)):.2f} Hz. Mean time consumption: {np.mean(time_consumptions):.4f} s."
-                )
-                self.realsense_timer_counter = 0
-                self.realsense_timer_counter_time = time.time()
-
     def refresh_rs_data(self) -> bool:
         """Currently refresh the depth data only."""
         refreshed = False
         if self.camera_individual_process:
             if self.camera_process is None:
                 raise ValueError("Camera not initialized. Call initialize_camera first.")
+            # Check if process is alive
+            if not self.camera_process.is_alive():
+                raise ValueError("Camera process is not alive. Exiting.")
             # Dump queue and get latest
-            if not hasattr(self, "rs_depth_data"):
-                rs_timestamp, self.rs_depth_data = self.result_queue.get()  # Block and wait for the first depth data
+            if self.rs_shared_header.writer_status == 0:
+                rs_timestamp = self.rs_shared_header.timestamp
+                self.rs_depth_data[:] = self.rs_image_buffer
+                self.get_logger().info(
+                    f"Realsense depth data delayed: {(time.time() - rs_timestamp):.4f} s.", throttle_duration_sec=5.0
+                )
                 refreshed = True
-            while self.result_queue.qsize() > 0:
-                try:
-                    rs_timestamp, self.rs_depth_data = self.result_queue.get(timeout=0.01)
-                    refreshed = True
-                except mp.queues.Empty:
-                    print("Realsense depth data queue is empty. Breaking.")
-                    break
-            self.get_logger().info(
-                f"Realsense depth data delayed: {(time.time() - rs_timestamp):.4f} s. queue size: {self.result_queue.qsize()}",
-                throttle_duration_sec=2.0,
-            )
+            self.rs_data_fresh_counter += 1
         else:
             if self.camera is None:
                 raise ValueError("Camera not initialized. Call initialize_camera first.")
@@ -188,12 +205,18 @@ class RsCameraNodeMixin:
 
     def destroy_node(self):
         if self.camera_individual_process and self.camera_process:
-            self.request_queue.put(None)  # Signal to exit
+            self.rs_shared_header.writer_termination_signal = 1
             self.camera_process.join(timeout=1.0)
             if self.camera_process.is_alive():
-                print("Warning: Camera process did not terminate gracefully, forcing terminate.")
+                self.get_logger().warn("Camera process is still alive after timeout. Terminating and joining.")
                 self.camera_process.terminate()
                 self.camera_process.join()
+            self.rs_image_buffer = None
+            self.rs_shared_header = None
+            self.camera_process = None
+            self.rs_shared_memory.close()
+            self.rs_shared_memory.unlink()
+            self.rs_shared_memory = None
         super().destroy_node()
 
 
