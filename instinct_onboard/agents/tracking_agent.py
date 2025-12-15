@@ -443,6 +443,7 @@ class PerceptiveTrackerAgent(TrackerAgent):
 
     def _get_visualizable_image_obs(self):
         """Return the depth image."""
+        self.ros_node.refresh_rs_data()
         depth_image: np.ndarray = self.ros_node.rs_depth_data
         # normalize based on given range
         depth_image = np.clip(depth_image, self.depth_image_clip_range[0], self.depth_image_clip_range[1])
@@ -476,4 +477,6 @@ class PerceptiveTrackerAgent(TrackerAgent):
             (self.depth_image_final_resolution[1], self.depth_image_final_resolution[0]),
             interpolation=cv2.INTER_LINEAR,
         )
+        # inpaint the depth image
+        depth_image = cv2.inpaint(depth_image, (depth_image < 0.2).astype(np.uint8), 3, cv2.INPAINT_NS)
         return depth_image
