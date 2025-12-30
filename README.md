@@ -1,15 +1,16 @@
-# Instinct G1
+# Instinct Onboard
 
-## Jetson
-The code for running network onboard of Unitree G1's Jetson Orin NX
+This is the onboard code for Project Instinct. Dsgiend for supporting the inference of the network on different robot manufacturing platforms.
 
-### Prerequisites
-- Ubuntu 20.04
-- ROS2 Foxy
-- unitree_hg ros messages
-- unitree_go ros messages (for wireless controller)
+***NOTE*** Current projects are only tested on Ubuntu 22.04 and ROS2 Humble with Unitree G1's Jetson Orin NX, 29Dof version.
 
-### Installation
+## Prerequisites
+- Ubuntu
+- ROS2
+- Python
+
+### Installation (Unitree G1 Jetson Orin NX)
+
 - JetPack
     ```bash
     sudo apt-get update
@@ -20,12 +21,15 @@ The code for running network onboard of Unitree G1's Jetson Orin NX
 
     Follow the instruction of [crc_module](https://github.com/ZiwenZhuang/g1_crc) and copy the product (`crc_module.so`) to where you launch the python script.
 
+- Install `unitree_hg` and `unitree_go` message definitions
+
+
+### Installation (Common)
+
 - Make sure mcap storage for ros2 installed
     ```bash
     sudo apt install ros-{ROS_VERSION}-rosbag2-storage-mcap
     ```
-
-- Install ROS2 packages in your own ROS workspace.
 
 - python virtual environment
     ```bash
@@ -34,10 +38,30 @@ The code for running network onboard of Unitree G1's Jetson Orin NX
     source instinct_venv/bin/activate
     ```
 
-- Some onboard python packages through pip
+- Install onboard python packages with automatic GPU detection (But with no OpenCV libraries)
     ```bash
     pip install -e .
     ```
+    This will automatically detect if GPU/CUDA is available and install the appropriate ONNX Runtime version.
+
+    - Installation options:
+        ```bash
+        # Default installation (includes all dependencies including OpenCV libraries)
+        pip install -e .[all]
+
+        # No OpenCV dependencies installation
+        pip install -e .[noopencv]
+        ```
+
+- Make sure `cv2` is accessible in the python environment. You can test it by running `import cv2` in the python shell.
+
+    - `pip install opencv-python` or follow the instruction on [Geek for Geeks](https://www.geeksforgeeks.org/python/getting-started-with-opencv-cuda-module/) to build your own OpenCV with CUDA support.
+
+- Notes:
+    - ONNX Runtime version is auto-detected (GPU if available, CPU otherwise)
+    - Use environment variables to override detection: `FORCE_CPU=1 pip install -e .` or `FORCE_GPU=1 pip install -e .`
+    - If you want to build your GPU version OpenCV from source, you can install `instinct_onboard` with `[noopencv]` option.
+
 
 ## Code Structure Introduction
 
