@@ -10,7 +10,7 @@ import yaml
 from geometry_msgs.msg import PoseArray
 
 from instinct_onboard.agents.base import OnboardAgent
-from instinct_onboard.ros_nodes.ros_real import Ros2Real
+from instinct_onboard.ros_nodes.base import RealNode
 from instinct_onboard.utils import quat_to_tan_norm_batch
 from motion_target_msgs.msg import MotionSequence
 
@@ -19,7 +19,7 @@ class ShadowingAgent(OnboardAgent):
     def __init__(
         self,
         logdir: str,
-        ros_node: Ros2Real,
+        ros_node: RealNode,
     ):
         super().__init__(logdir, ros_node)
         self.ort_sessions = dict()
@@ -82,7 +82,7 @@ class ShadowingAgent(OnboardAgent):
 
     def reset(self):
         """Reset the agent state and the rosbag reader."""
-        pass
+        super().reset()
 
     def step(self):
         """Perform a single step of the agent."""
@@ -146,7 +146,7 @@ class ShadowingAgent(OnboardAgent):
         )  # (6,)
         return root_tannorm_w
 
-    def _get_time_to_target_command_obs(self) -> np.ndarray:
+    def _get_time_to_target_command_cmd_obs(self) -> np.ndarray:
         """Return shape: (num_frames, 1)"""
         return self.ros_node.packed_motion_sequence_buffer["time_to_target"].reshape(-1, 1)  # (num_frames, 1)
 
@@ -163,11 +163,11 @@ class ShadowingAgent(OnboardAgent):
             :, None
         ]  # (num_frames, 1)
 
-    def _get_position_ref_command_obs(self):
+    def _get_position_ref_command_cmd_obs(self):
         """Command, return shape: (num_frames, 3)"""
         return self.ros_node.packed_motion_sequence_buffer["root_pos_b"]
 
-    def _get_rotation_ref_command_obs(self):
+    def _get_rotation_ref_command_cmd_obs(self):
         """Command, return shape: (num_frames, 6)"""
         root_quat_w_ref_ = self.ros_node.packed_motion_sequence_buffer["root_quat_w"]  # (num_frames, 4)
         if self.rotation_reference_in_base_frame:
@@ -180,50 +180,50 @@ class ShadowingAgent(OnboardAgent):
             root_tannorm_cmd = quat_to_tan_norm_batch(root_quat_w_ref_)  # (num_frames, 6)
         return root_tannorm_cmd  # (num_frames, 6), in tangent-normal form
 
-    def _get_position_ref_command_mask_obs(self):
+    def _get_position_ref_command_mask_cmd_obs(self):
         """Command, return shape: (num_frames, 2)"""
         return self.ros_node.packed_motion_sequence_buffer["pose_mask"][:, :2]
 
-    def _get_rotation_ref_command_mask_obs(self):
+    def _get_rotation_ref_command_mask_cmd_obs(self):
         """Command, return shape: (num_frames, 2)"""
         return self.ros_node.packed_motion_sequence_buffer["pose_mask"][:, 2:]
 
     # def _get_pose_ref_mask_obs(self):
     #     return self.ros_node.packed_motion_sequence_buffer["pose_mask"]  # (num_frames, 4)
 
-    def _get_joint_pos_ref_command_obs(self):
+    def _get_joint_pos_ref_command_cmd_obs(self):
         """Command, return shape: (num_frames, num_joints)"""
         return (
             self.ros_node.packed_motion_sequence_buffer["joint_pos"] - self.ros_node.default_joint_pos[None, :]
         )  # (num_frames, num_joints)
 
-    def _get_joint_pos_err_ref_command_obs(self):
+    def _get_joint_pos_err_ref_command_cmd_obs(self):
         """Command, return shape: (num_frames, num_joints)"""
         return (
             self.ros_node.packed_motion_sequence_buffer["joint_pos"] - self.ros_node.joint_pos_[None, :]
         )  # (num_frames, num_joints)
 
-    def _get_joint_pos_ref_command_mask_obs(self):
+    def _get_joint_pos_ref_command_mask_cmd_obs(self):
         """Command, return shape: (num_frames, num_joints)"""
         return self.ros_node.packed_motion_sequence_buffer["joint_pos_mask"]  # (num_frames, num_joints)
 
-    def _get_link_pos_ref_command_obs(self):
+    def _get_link_pos_ref_command_cmd_obs(self):
         return self.ros_node.packed_motion_sequence_buffer["link_pos"]  # (num_frames, num_links, 3), in robot base link
 
-    def _get_link_pos_err_ref_command_obs(self):
+    def _get_link_pos_err_ref_command_cmd_obs(self):
         return (
             self.ros_node.packed_motion_sequence_buffer["link_pos"] - self.link_pos_[None, :, :]
         )  # (num_frames, num_links, 3)
 
-    def _get_link_pos_ref_command_mask_obs(self):
+    def _get_link_pos_ref_command_mask_cmd_obs(self):
         return self.ros_node.packed_motion_sequence_buffer["link_pos_mask"]  # (num_frames, num_links)
 
-    def _get_link_rot_ref_command_obs(self):
+    def _get_link_rot_ref_command_cmd_obs(self):
         return self.ros_node.packed_motion_sequence_buffer[
             "link_tannorm"
         ]  # (num_frames, num_links, 6), in robot base link
 
-    def _get_link_rot_err_ref_command_obs(self):
+    def _get_link_rot_err_ref_command_cmd_obs(self):
         link_quat_ref_ = self.ros_node.packed_motion_sequence_buffer["link_quat"]  # (num_frames, num_links, 4)
         link_quat_ = self.link_quat_[None, :, :]  # (1, num_links, 4)
         link_quat_ref = quaternion.from_float_array(link_quat_ref_)  # (num_frames, num_links, quaternion(4))
@@ -234,7 +234,7 @@ class ShadowingAgent(OnboardAgent):
         link_tannorm_err = link_tannorm_err_.reshape(*link_rot_err.shape[:2], 6)
         return link_tannorm_err  # (num_frames, num_links, 6)
 
-    def _get_link_rot_ref_command_mask_obs(self):
+    def _get_link_rot_ref_command_mask_cmd_obs(self):
         return self.ros_node.packed_motion_sequence_buffer["link_quat_mask"]  # (num_frames, num_links)
 
 
@@ -246,7 +246,7 @@ class MotionAsActAgent(OnboardAgent):
     def __init__(
         self,
         logdir: str,
-        ros_node: Ros2Real,
+        ros_node: RealNode,
         joint_diff_threshold: float = 0.2,
         joint_diff_scale: float = 0.2,
     ):

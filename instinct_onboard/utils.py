@@ -98,6 +98,52 @@ def yaw_quat(quat: np.quaternion) -> np.quaternion:
     return normalize_quat(quaternion.as_quat_array(quat_yaw))
 
 
+def quat_slerp_batch(
+    q1: np.ndarray,
+    q2: np.ndarray,
+    tau: np.ndarray,
+) -> np.ndarray:
+    """Slerp between two quaternions.
+    Args:
+        q1: The first quaternions in (N, 4) shape.
+        q2: The second quaternions in (N, 4) shape.
+        tau: The interpolation factors in (N,) shape.
+    Returns:
+        The slerped quaternions in (N, 4) shape.
+    """
+    # ensure the input is in the right shape
+    assert q1.shape[-1] == 4, "The quaternion must be in (w, x, y, z) format."
+    assert q2.shape[-1] == 4, "The quaternion must be in (w, x, y, z) format."
+    assert tau.shape == q1.shape[:-1], "The batch size must be the same for all inputs."
+    assert q1.shape[0] == q2.shape[0] == tau.shape[0], "The batch size must be the same for all inputs."
+    assert (tau >= 0).all() and (tau <= 1).all(), "The interpolation factor must be in (0, 1) range."
+
+    # if the dot product is negative, flip the quaternion
+    dot_product = np.sum(q1 * q2, axis=-1, keepdims=True).clip(-1, 1)  # shape (N, 1)
+    q2 = np.where(dot_product < 0, -q2, q2)
+    dot_product = np.where(dot_product < 0, -dot_product, dot_product)
+
+    # calculate the angle between the two quaternions
+    theta = np.arccos(dot_product)
+    sin_theta = np.sin(theta)
+    q_too_similar = (dot_product > (1 - 1e-9)) | (np.abs(theta) < (1e-9))
+
+    # avoid division by zero
+    sin_theta = np.where(np.abs(sin_theta) < 1e-9, np.ones_like(sin_theta), sin_theta)
+
+    # calculate the interpolation factor
+    s1 = np.sin((1 - tau)[:, None] * theta) / sin_theta
+    s2 = np.sin(tau[:, None] * theta) / sin_theta
+
+    # calculate the interpolated quaternion
+    interpolated_quat = (s1 * q1 + s2 * q2) * (~q_too_similar) + q_too_similar * q1
+    interpolated_quat = interpolated_quat / np.linalg.norm(interpolated_quat, axis=-1, keepdims=True).clip(
+        min=1e-6
+    )  # shape (N, 4)
+
+    return interpolated_quat
+
+
 class CircularBuffer:
     """A circular buffer with fixed length and filled with a default value."""
 

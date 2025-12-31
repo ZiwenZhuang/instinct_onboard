@@ -1,22 +1,16 @@
-import re
-
 import numpy as np
 import rclpy
-from rclpy.node import Node
-from std_msgs.msg import Float32MultiArray
 from unitree_go.msg import WirelessController
 from unitree_hg.msg import IMUState, LowCmd, LowState  # MotorState,; MotorCmd,
 
 import instinct_onboard.robot_cfgs as robot_cfgs
 from crc_module import get_crc
 from instinct_onboard import utils
+from instinct_onboard.ros_nodes.base import RealNode
 
 
-class Ros2Real(Node):
-    """This is the basic implementation of handling ROS messages matching the design of IsaacLab.
-    It is designed to be used in the script directly to run the ONNX function. But please handle the
-    impl of combining observations in the agent implementation.
-    """
+class UnitreeNode(RealNode):
+    """This is the implementation of the Unitree robot ROS interface."""
 
     def __init__(
         self,
@@ -24,72 +18,30 @@ class Ros2Real(Node):
         low_cmd_topic: str = "/lowcmd",
         imu_state_topic: str = "/secondary_imu",
         joy_stick_topic: str = "/wirelesscontroller",
-        computer_clip_torque=True,  # if True, the actions will be clipped by torque limits
-        joint_pos_protect_ratio=1.5,  # if the joint_pos is out of the range of this ratio, the process will shutdown.
-        kp_factor=1.0,  # the factor to multiply the p_gain
-        kd_factor=1.0,  # the factor to multiply the d_gain
-        torque_limits_ratio=1.0,  # the factor to multiply the torque limits
-        robot_class_name="G1_29Dof",
-        dryrun=True,  # if True, the robot will not send commands to the real robot
+        **kwargs,
     ):
-        super().__init__("unitree_ros_real")
-        self.NUM_JOINTS = getattr(robot_cfgs, robot_class_name).NUM_JOINTS
-        self.NUM_ACTIONS = getattr(robot_cfgs, robot_class_name).NUM_ACTIONS
+        super().__init__(node_name="unitree_node", **kwargs)
         self.low_state_topic = low_state_topic
         self.imu_state_topic = imu_state_topic
         # Generate a unique cmd topic so that the low_cmd will not send to the robot's motor.
         self.low_cmd_topic = (
-            low_cmd_topic if not dryrun else low_cmd_topic + "_dryrun_" + str(np.random.randint(0, 65535))
+            low_cmd_topic if not self.dryrun else low_cmd_topic + "_dryrun_" + str(np.random.randint(0, 65535))
         )
         self.joy_stick_topic = joy_stick_topic
-        self.computer_clip_torque = computer_clip_torque
-        self.joint_pos_protect_ratio = joint_pos_protect_ratio
-        self.kp_factor = kp_factor
-        self.kd_factor = kd_factor
-        self.torque_limits_ratio = torque_limits_ratio
-        self.robot_class_name = robot_class_name
-        self.dryrun = dryrun
-
-        # load robot-specific configurations
-        self.joint_map = getattr(robot_cfgs, robot_class_name).joint_map
-        self.sim_joint_names = getattr(robot_cfgs, robot_class_name).sim_joint_names
-        self.real_joint_names = getattr(robot_cfgs, robot_class_name).real_joint_names
-        self.joint_signs = getattr(robot_cfgs, robot_class_name).joint_signs
-        self.turn_on_motor_mode = getattr(robot_cfgs, robot_class_name).turn_on_motor_mode
-        self.mode_pr = getattr(robot_cfgs, robot_class_name).mode_pr
-
-        self.parse_config()
 
     def parse_config(self):
-        """Parse, set attributes from config dict, initialize buffers to speed up the computation"""
-        self.up_axis_idx = 2  # 2 for z, 1 for y -> adapt gravity accordingly
-        self.gravity_vec = np.zeros(3)
-        self.gravity_vec[self.up_axis_idx] = -1
+        super().parse_config()
 
-        self.torque_limits = getattr(robot_cfgs, self.robot_class_name).torque_limits * self.torque_limits_ratio
-        self.get_logger().info(f"Torque limits are set by ratio of : {self.torque_limits_ratio}")
-
-        # buffers for observation output (in simulation order)
-        self.joint_pos_ = np.zeros(
-            self.NUM_JOINTS, dtype=np.float32
-        )  # in robot urdf coordinate, but in simulation order. no offset subtracted
-        self.joint_vel_ = np.zeros(self.NUM_JOINTS, dtype=np.float32)
-
-        # action (for get_last_action_obs across multiple agents)
-        self.actions = np.zeros(self.NUM_ACTIONS, dtype=np.float32)
-
-        # hardware related, in simulation order
-        self.joint_limits_high = getattr(robot_cfgs, self.robot_class_name).joint_limits_high
-        self.joint_limits_low = getattr(robot_cfgs, self.robot_class_name).joint_limits_low
-        joint_pos_mid = (self.joint_limits_high + self.joint_limits_low) / 2
-        joint_pos_range = (self.joint_limits_high - self.joint_limits_low) / 2
-        self.joint_pos_protect_high = joint_pos_mid + joint_pos_range * self.joint_pos_protect_ratio
-        self.joint_pos_protect_low = joint_pos_mid - joint_pos_range * self.joint_pos_protect_ratio
+        # load robot-specific configurations
+        self.joint_map = getattr(robot_cfgs, self.robot_class_name).joint_map
+        self.real_joint_names = getattr(robot_cfgs, self.robot_class_name).real_joint_names
+        self.joint_signs = getattr(robot_cfgs, self.robot_class_name).joint_signs
+        self.turn_on_motor_mode = getattr(robot_cfgs, self.robot_class_name).turn_on_motor_mode
+        self.mode_pr = getattr(robot_cfgs, self.robot_class_name).mode_pr
 
     def start_ros_handlers(self):
         """After initializing the env and policy, register ros related callbacks and topics"""
-        # ROS publishers
-        self.action_publisher = self.create_publisher(Float32MultiArray, "/raw_actions", 10)
+        super().start_ros_handlers()
         self.low_cmd_publisher = self.create_publisher(LowCmd, self.low_cmd_topic, 10)
         self.low_cmd_buffer = LowCmd()
         self.low_cmd_buffer.mode_pr = self.mode_pr
@@ -220,67 +172,9 @@ class Ros2Real(Node):
             self.gravity_vec,
         ).astype(np.float32)
 
-    def _get_joint_pos_obs(self):
-        return self.joint_pos_
-
-    def _get_joint_vel_obs(self):
-        return self.joint_vel_
-
-    def _get_last_action_obs(self):
-        return self.actions
-
     """
     Control related functions
     """
-
-    def clip_by_torque_limit(
-        self,
-        target_joint_pos,
-        p_gains: np.ndarray = 0.0,
-        d_gains: np.ndarray = 0.0,
-    ):
-        """Different from simulation, we reverse the process and clip the target position directly,
-        so that the PD controller runs in robot but not our script.
-        """
-        p_limits_low = (-self.torque_limits) + d_gains * self.joint_vel_
-        p_limits_high = (self.torque_limits) + d_gains * self.joint_vel_
-        action_low = (p_limits_low / p_gains) + self.joint_pos_
-        action_high = (p_limits_high / p_gains) + self.joint_pos_
-
-        return np.clip(target_joint_pos, action_low, action_high)
-
-    def send_action(
-        self,
-        action: np.array,
-        action_offset: np.array = 0.0,
-        action_scale: np.ndarray = 1.0,
-        p_gains: np.ndarray = 0.0,
-        d_gains: np.ndarray = 0.0,
-    ):
-        """Send the action to the robot motors, which does the preprocessing
-        just like env.step in simulation.
-        However, since this process only controls one robot, the action is not batched.
-        NOTE: when switching between agents, the last_action term should be shared between agents.
-        Thus, the ros node has to update the action buffer
-        """
-        # NOTE: Only calling this function currently will update self.actions for self._get_last_action_obs
-        self.actions[:] = action
-        self.action_publisher.publish(Float32MultiArray(data=action))
-        action_scaled = action * action_scale
-        target_joint_pos = action_scaled + action_offset
-        p_gains = np.clip(p_gains * self.kp_factor, 0.0, 500.0)
-        d_gains = np.clip(d_gains * self.kd_factor, 0.0, 5.0)
-        if np.isnan(action).any():
-            self.get_logger().error("Actions contain NaN, Skip sending the action to the robot.")
-            return
-        if self.computer_clip_torque:
-            target_joint_pos = self.clip_by_torque_limit(
-                target_joint_pos,
-                p_gains=p_gains,
-                d_gains=d_gains,
-            )
-        # target_joint_pos=np.clip(a=target_joint_pos, a_max=self.joint_limits_high, a_min=self.joint_limits_low)
-        self._publish_motor_cmd(target_joint_pos, p_gains=p_gains, d_gains=d_gains)
 
     """
     Functions that actually publish the commands and take effect

@@ -4,10 +4,10 @@ import rclpy
 import yaml
 
 from instinct_onboard.agents.base import ColdStartAgent
-from instinct_onboard.ros_nodes.ros_real import Ros2Real
+from instinct_onboard.ros_nodes.unitree import UnitreeNode
 
 
-class ExampleNode(Ros2Real):
+class ExampleNode(UnitreeNode):
     """An example ROS node that patches Node and Agent to run the system."""
 
     def start_ros_handlers(self):

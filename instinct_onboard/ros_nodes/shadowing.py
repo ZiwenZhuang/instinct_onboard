@@ -6,7 +6,7 @@ from rclpy.node import Node
 from instinct_onboard.utils import quat_to_tan_norm_batch
 from motion_target_msgs.msg import MotionSequence
 
-from .ros_real import Ros2Real
+from .ros_real import UnitreeNode
 
 
 class ShadowingNodeMixin:
@@ -97,5 +97,5 @@ class ShadowingNodeMixin:
         )
 
 
-class ShadowingNode(ShadowingNodeMixin, Ros2Real):
+class ShadowingNode(ShadowingNodeMixin, UnitreeNode):
     pass
