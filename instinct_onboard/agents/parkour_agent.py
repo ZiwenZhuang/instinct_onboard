@@ -1,9 +1,8 @@
 from __future__ import annotations
 
-import multiprocessing as mp
+import math
 import os
 import re
-import threading
 import time
 from typing import Tuple
 
@@ -11,84 +10,15 @@ import cv2
 import numpy as np
 import onnxruntime as ort
 import prettytable
-import pyrealsense2 as rs
 import ros2_numpy as rnp
 import yaml
-from sensor_msgs.msg import CameraInfo, Image
+from geometry_msgs.msg import TransformStamped
+from sensor_msgs.msg import CameraInfo, Image, PointCloud2, PointField
+from tf2_ros import StaticTransformBroadcaster
 
 from instinct_onboard.agents.base import OnboardAgent
-from instinct_onboard.ros_nodes.ros_real import Ros2Real
+from instinct_onboard.ros_nodes.base import RealNode
 from instinct_onboard.utils import CircularBuffer
-
-PUBLISH_DEPTH = False
-
-
-def depth_worker(queue, config):
-    rs_pipeline = rs.pipeline()
-    rs_config = rs.config()
-    rs_config.enable_stream(
-        rs.stream.depth,
-        config["rs_resolution"][0],
-        config["rs_resolution"][1],
-        rs.format.z16,
-        config["rs_frequency"],
-    )
-    rs_profile = rs_pipeline.start(rs_config)
-    depth_scale = rs_profile.get_device().first_depth_sensor().get_depth_scale()
-    depth_image_buffer = CircularBuffer(length=config["rs_frequency"])
-
-    while True:
-        try:
-            rs_frame = rs_pipeline.wait_for_frames(timeout_ms=300)  # ms
-            depth_frame = rs_frame.get_depth_frame()
-            if not depth_frame:
-                raise RuntimeError("No depth frame")
-        except RuntimeError as e:
-            print("Camera Error!")
-            raise RuntimeError("Camera disconnected") from e
-        # start_get = time.time()
-        depth_image_np = np.asanyarray(depth_frame.get_data(), dtype=np.float32) * depth_scale
-        # depth_input_msg = rnp.msgify(Image, np.asanyarray(depth_image_np/self.depth_scale, dtype=np.uint16), encoding="16UC1")
-
-        depth_image = cv2.resize(depth_image_np, config["output_resolution"], interpolation=cv2.INTER_NEAREST)
-
-        if "crop_region" in config:
-            shape = depth_image.shape
-            x1, x2, y1, y2 = config["crop_region"]
-            depth_image = depth_image[x1 : shape[0] - x2, y1 : shape[1] - y2]
-
-        mask = (depth_image < 0.2).astype(np.uint8)
-        depth_image = cv2.inpaint(depth_image, mask, 3, cv2.INPAINT_NS)
-
-        if "blind_spot_crop" in config:
-            shape = depth_image.shape
-            x1, x2, y1, y2 = config["blind_spot_crop"]
-            depth_image[:x1, :] = 0
-            depth_image[shape[0] - x2 :, :] = 0
-            depth_image[:, :y1] = 0
-            depth_image[:, shape[1] - y2 :] = 0
-        if "gaussian_kernel_size" in config:
-            depth_image = cv2.GaussianBlur(
-                depth_image, config["gaussian_kernel_size"], config["gaussian_sigma"], config["gaussian_sigma"]
-            )
-
-        filt_m = np.clip(depth_image, config["depth_range"][0], config["depth_range"][1])
-        filt_norm = (filt_m - config["depth_range"][0]) / (config["depth_range"][1] - config["depth_range"][0])
-
-        output_norm = (
-            filt_norm * (config["depth_output_range"][1] - config["depth_output_range"][0])
-            + config["depth_output_range"][0]
-        )
-        # depth_image = depth_image_np[self.y_valid, self.x_valid]
-        # publish the depth image input to ros topic
-        depth_image_buffer.append(output_norm)
-        if queue.full():
-            try:
-                queue.get_nowait()
-            except:
-                pass
-        queue.put(depth_image_buffer)
-        # print("Depth processing time: {:.4f} ms.".format((time.time() - start_get) * 1000))
 
 
 class ParkourAgent(OnboardAgent):
@@ -99,10 +29,12 @@ class ParkourAgent(OnboardAgent):
     def __init__(
         self,
         logdir: str,
-        ros_node: Ros2Real,
+        ros_node: RealNode,
+        depth_vis: bool = False,
+        pointcloud_vis: bool = False,
+        move_by_wireless_buttons: bool = True,
     ):
         super().__init__(logdir, ros_node)
-        assert cv2.cuda.getCudaEnabledDeviceCount() > 0, "ParkourAgent requires a CUDA-enabled OpenCV installation."
         self.ort_sessions = dict()
         self.lin_vel_deadband = 0.15
         self.ang_vel_deadband = 0.15
@@ -117,15 +49,37 @@ class ParkourAgent(OnboardAgent):
             "/depth_image",
             1,
         )
-        self.move_by_wireless_remote = False
-        self.move_by_wireless_buttons = True
+        self.move_by_wireless_remote = not move_by_wireless_buttons
+        self.move_by_wireless_buttons = move_by_wireless_buttons
         self._parse_obs_config()
         self._parse_action_config()
-        self._parse_depth_image_config()
         self._load_models()
-        self._start_rs_pipeline()
-        # self._depth_thread = threading.Thread(target=self.get_depth_frame, daemon=True)
-        # self._depth_thread.start()
+        # self._start_rs_pipeline()
+        self.depth_vis = depth_vis
+        if self.depth_vis:
+            self.debug_depth_publisher = self.ros_node.create_publisher(Image, "/realsense/depth_image", 10)
+        else:
+            self.debug_depth_publisher = None
+        self.pointcloud_vis = pointcloud_vis
+        if self.pointcloud_vis:
+            # Publish static TF
+            self.static_tf_broadcaster = StaticTransformBroadcaster(self.ros_node)
+            t = TransformStamped()
+            t.header.stamp = self.ros_node.get_clock().now().to_msg()
+            t.header.frame_id = "torso_link"
+            t.child_frame_id = "d435_depth_link"
+            t.transform.translation.x = 0.04764571478 + 0.0039635 - 0.0042 * math.cos(math.radians(48))
+            t.transform.translation.y = 0.015
+            t.transform.translation.z = 0.46268178553 - 0.044 + 0.0042 * math.sin(math.radians(48)) + 0.016
+            t.transform.rotation.w = math.cos(math.radians(0.5) / 2) * math.cos(math.radians(48) / 2)
+            t.transform.rotation.x = math.sin(math.radians(0.5) / 2)
+            t.transform.rotation.y = math.sin(math.radians(48) / 2)
+            t.transform.rotation.z = 0.0
+            self.static_tf_broadcaster.sendTransform(t)
+
+            self.debug_pointcloud_publisher = self.ros_node.create_publisher(PointCloud2, "/realsense/pointcloud", 10)
+        else:
+            self.debug_pointcloud_publisher = None
 
     def _parse_obs_config(self):
         super()._parse_obs_config()
@@ -143,6 +97,7 @@ class ParkourAgent(OnboardAgent):
             table.add_row([obs_name, func.__name__])
         print("Observation functions:")
         print(table)
+        self._parse_depth_image_config()
 
     def _parse_action_config(self):
         super()._parse_action_config()
@@ -156,15 +111,12 @@ class ParkourAgent(OnboardAgent):
                             self._zero_action_joints[i] = 1.0
 
     def _parse_depth_image_config(self):
-        self.depth_configs = {}
         self.output_resolution = [
             self.cfg["scene"]["camera"]["pattern_cfg"]["width"],
             self.cfg["scene"]["camera"]["pattern_cfg"]["height"],
         ]
-        self.depth_configs["output_resolution"] = self.output_resolution
 
         self.depth_range = self.cfg["scene"]["camera"]["noise_pipeline"]["depth_normalization"]["depth_range"]
-        self.depth_configs["depth_range"] = self.depth_range
 
         if self.cfg["scene"]["camera"]["noise_pipeline"]["depth_normalization"]["normalize"]:
             self.depth_output_range = self.cfg["scene"]["camera"]["noise_pipeline"]["depth_normalization"][
@@ -172,22 +124,17 @@ class ParkourAgent(OnboardAgent):
             ]
         else:
             self.depth_output_range = self.depth_range
-        self.depth_configs["depth_output_range"] = self.depth_output_range
 
         if "crop_and_resize" in self.cfg["scene"]["camera"]["noise_pipeline"]:
             self.crop_region = self.cfg["scene"]["camera"]["noise_pipeline"]["crop_and_resize"]["crop_region"]
-            self.depth_configs["crop_region"] = self.crop_region
         if "gaussian_blur" in self.cfg["scene"]["camera"]["noise_pipeline"]:
             self.gaussian_kernel_size = (
                 self.cfg["scene"]["camera"]["noise_pipeline"]["gaussian_blur"]["kernel_size"],
                 self.cfg["scene"]["camera"]["noise_pipeline"]["gaussian_blur"]["kernel_size"],
             )
             self.gaussian_sigma = self.cfg["scene"]["camera"]["noise_pipeline"]["gaussian_blur"]["sigma"]
-            self.depth_configs["gaussian_kernel_size"] = self.gaussian_kernel_size
-            self.depth_configs["gaussian_sigma"] = self.gaussian_sigma
         if "blind_spot" in self.cfg["scene"]["camera"]["noise_pipeline"]:
             self.blind_spot_crop = self.cfg["scene"]["camera"]["noise_pipeline"]["blind_spot"]["crop_region"]
-            self.depth_configs["blind_spot_crop"] = self.blind_spot_crop
         self.depth_width = (
             self.output_resolution[0] - self.crop_region[2] - self.crop_region[3]
             if hasattr(self, "crop_region")
@@ -198,10 +145,6 @@ class ParkourAgent(OnboardAgent):
             if hasattr(self, "crop_region")
             else self.output_resolution[1]
         )
-        self.depth_configs["depth_width"] = self.depth_width
-        self.depth_configs["depth_height"] = self.depth_height
-        self.depth_configs["rs_frequency"] = self.rs_frequency
-        self.depth_configs["rs_resolution"] = self.rs_resolution
         # For sample resize
         square_size = int(self.rs_resolution[0] // self.output_resolution[0])
         rows, cols = self.rs_resolution[1], self.rs_resolution[0]
@@ -245,81 +188,6 @@ class ParkourAgent(OnboardAgent):
         self.ort_sessions["actor"] = ort.InferenceSession(actor_path, providers=ort_execution_providers)
         print(f"Loaded ONNX models from {self.logdir}")
 
-    def _start_rs_pipeline(self):
-        """Start the RealSense camera pipeline."""
-        self.depth_queue = mp.Queue(maxsize=1)
-        self.depth_proc = mp.Process(target=depth_worker, args=(self.depth_queue, self.depth_configs), daemon=True)
-        self.depth_proc.start()
-
-    # def get_depth_frame(self):
-    #     while True:
-    #         # print("Current time:", time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()))
-    #         # read from pyrealsense2, preprocess and write the model latent to the buffer
-    #         rs_frame = self.rs_pipeline.wait_for_frames()  # ms
-    #         # frame_timestamp = rs_frame.get_timestamp()
-    #         depth_frame = rs_frame.get_depth_frame()
-    #         # current_time_ms = int(time.time() * 1000)
-    #         # print("RealSense frame retrieval time: {:.4f} ms, current time: {} ms.".format(frame_timestamp, current_time_ms))
-    #         if not depth_frame:
-    #             self.ros_node.get_logger().error("No depth frame", throttle_duration_sec=1)
-    #             return
-    #         # apply relsense filters
-    #         # start_filter = time.time()
-    #         # for rs_filter in self.rs_filters:
-    #         #     depth_frame = rs_filter.process(depth_frame)
-    #         # filter_time = time.time() - start_filter
-    #         # start_get = time.time()
-    #         depth_image_np = np.asanyarray(depth_frame.get_data(), dtype=np.float32) * self.depth_scale
-    #         # depth_input_msg = rnp.msgify(Image, np.asanyarray(depth_image_np/self.depth_scale, dtype=np.uint16), encoding="16UC1")
-
-    #         depth_image = cv2.resize(depth_image_np, self.output_resolution, interpolation=cv2.INTER_NEAREST)
-    #         # depth_image = depth_image_np[self.y_valid, self.x_valid]
-
-    #         if self.visualize_depth:
-    #             # display normalized depth as 8-bit for visualization
-    #             vis = (depth_image/2.5 * 255).astype(np.uint8)
-    #             filename = f"depth.png"
-    #             cv2.imwrite(filename, vis)
-    #             # cv2.imshow("Depth Image", vis)
-
-    #         if hasattr(self, "crop_region"):
-    #             shape = depth_image.shape
-    #             x1, x2, y1, y2 = self.crop_region
-    #             depth_image = depth_image[x1 : shape[0] - x2, y1 : shape[1] - y2]
-
-    #         mask = (depth_image < 0.2).astype(np.uint8)
-    #         depth_image = cv2.inpaint(depth_image, mask, 3, cv2.INPAINT_NS)
-
-    #         if hasattr(self, "blind_spot_crop"):
-    #             shape = depth_image.shape
-    #             x1, x2, y1, y2 = self.blind_spot_crop
-    #             depth_image[:x1, :] = 0
-    #             depth_image[shape[0] - x2 :, :] = 0
-    #             depth_image[:, :y1] = 0
-    #             depth_image[:, shape[1] - y2 :] = 0
-    #         if hasattr(self, "gaussian_kernel_size"):
-    #             depth_image = cv2.GaussianBlur(
-    #                 depth_image, self.gaussian_kernel_size, self.gaussian_sigma, self.gaussian_sigma
-    #             )
-
-    #         if self.publish_depth:
-    #             depth_input_msg = rnp.msgify(Image, np.asanyarray(depth_image/self.depth_scale, dtype=np.uint16), encoding="16UC1")
-    #             depth_input_msg.header.stamp = self.ros_node.get_clock().now().to_msg()
-    #             depth_input_msg.header.frame_id = "d435_depth_link"
-    #             self.depth_input_pub.publish(depth_input_msg)
-
-    #         filt_m = np.clip(depth_image, self.depth_range[0], self.depth_range[1])
-    #         filt_norm = (filt_m - self.depth_range[0]) / (self.depth_range[1] - self.depth_range[0])
-
-    #         output_norm = (
-    #             filt_norm * (self.depth_output_range[1] - self.depth_output_range[0]) + self.depth_output_range[0]
-    #         )
-
-    #         # publish the depth image input to ros topic
-    #         self.ros_node.get_logger().info("depth range: {}-{}".format(*self.depth_range), once=True)
-    #         self.depth_image_buffer.append(output_norm)
-    #         # print("Depth processing time: {:.4f} ms.".format((time.time() - start_get) * 1000))
-
     def reset(self):
         """Reset the agent state and the rosbag reader."""
         pass
@@ -339,8 +207,23 @@ class ParkourAgent(OnboardAgent):
             .reshape(1, -1, self.depth_height, self.depth_width)
             .astype(np.float32)
         )
-        if self.visualize_depth:
+        if self.depth_vis:
             self._vis_depth_obs(depth_obs.reshape(-1, self.depth_height, self.depth_width))
+        if self.debug_depth_publisher is not None:
+            # NOTE: the +5.0 is a empirical value to ensure the normalized obs is not negative.
+            # Not using normalizer's value is to prevent further visualization code bugs.
+            depth_image_msg_data = np.asanyarray(
+                depth_obs[-1].reshape(*self.depth_image_final_resolution) * 255 * 2,
+                dtype=np.uint16,
+            )
+            depth_image_msg = rnp.msgify(Image, depth_image_msg_data, encoding="16UC1")
+            self.debug_depth_publisher.publish(depth_image_msg)
+        if self.debug_pointcloud_publisher is not None:
+            pointcloud_msg = self.create_pointcloud_msg(
+                depth_obs[-1].reshape(*self.depth_image_final_resolution) * self.depth_image_clip_range[1]
+                + self.depth_image_clip_range[0]
+            )
+            self.debug_pointcloud_publisher.publish(pointcloud_msg)
 
         # depth_obs*=0.
         depth_image_output = self.ort_sessions["depth_encoder"].run(
@@ -355,19 +238,13 @@ class ParkourAgent(OnboardAgent):
         mask = (self._zero_action_joints == 0).astype(bool)
         full_action = np.zeros(self.ros_node.NUM_ACTIONS, dtype=np.float32)
         full_action[mask] = action
-
-        done = False
         # print(time.time()-cur_time)
 
-        return full_action, done
+        return full_action, False
 
     """
     Agent specific observation functions for Parkour Agent.
     """
-
-    def _get_base_lin_vel_zero_obs(self):
-        """Return shape: (3,)"""
-        return np.zeros((3,))
 
     def _get_base_velocity_obs(self):
         """Return shape: (3,)"""
@@ -422,7 +299,7 @@ class ParkourAgent(OnboardAgent):
             else:
                 yaw = 0
 
-            self.xyyaw_command[0] = np.clip(self.xyyaw_command[0], 0, 3.0)
+            self.xyyaw_command[0] = np.clip(self.xyyaw_command[0], 0, 2.5)
             self.xyyaw_command[1] = 0.0
             self.xyyaw_command[2] = yaw
             return self.xyyaw_command
@@ -431,40 +308,51 @@ class ParkourAgent(OnboardAgent):
         """Return shape: (num_joints,)"""
         return self.ros_node.joint_vel_
 
-    def _get_depth_latent_obs(self):
-        """Return shape: (depth_latent_dim,)"""
-        return self.ros_node.depth_latent_buffer
-
     def _get_last_action_obs(self):
         """Return shape: (num_active_joints,)"""
-        actions = np.asarray(self.ros_node.actions).astype(np.float32)
+        actions = np.asarray(self.ros_node.action).astype(np.float32)
         mask = (1.0 - self._zero_action_joints).astype(bool)
         return actions[mask]
 
-    def _get_depth_image_downsample_obs(self):
-        """Return shape: (num_active_joints,)"""
-        if not hasattr(self, "depth_queue"):
-            return np.zeros((len(self.depth_obs_indices), self.depth_height, self.depth_width), dtype=np.float32)
-        try:
-            while True:
-                depth_images = self.depth_queue.get_nowait().buffer
-                self._last_depth_images = depth_images
-        except:
-            pass
+    def refresh_depth_frame(self):
+        """Return the depth image."""
+        self.ros_node.refresh_rs_data()
+        depth_image_np: np.ndarray = self.ros_node.rs_depth_data
+        # normalize based on given range
+        depth_image = cv2.resize(depth_image_np, self.output_resolution, interpolation=cv2.INTER_NEAREST)
 
-        if self._last_depth_images is None:
-            return np.zeros((len(self.depth_obs_indices), self.depth_height, self.depth_width), dtype=np.float32)
+        if hasattr(self, "crop_region"):
+            shape = depth_image.shape
+            x1, x2, y1, y2 = self.crop_region
+            depth_image = depth_image[x1 : shape[0] - x2, y1 : shape[1] - y2]
 
-        depth_image = self._last_depth_images[-1, ...]
-        if PUBLISH_DEPTH:
-            depth_input_msg = rnp.msgify(
-                Image, np.asanyarray(depth_image * 2.5 * 1000, dtype=np.uint16), encoding="16UC1"
+        mask = (depth_image < 0.2).astype(np.uint8)
+        depth_image = cv2.inpaint(depth_image, mask, 3, cv2.INPAINT_NS)
+
+        if hasattr(self, "blind_spot_crop"):
+            shape = depth_image.shape
+            x1, x2, y1, y2 = self.blind_spot_crop
+            depth_image[:x1, :] = 0
+            depth_image[shape[0] - x2 :, :] = 0
+            depth_image[:, :y1] = 0
+            depth_image[:, shape[1] - y2 :] = 0
+        if hasattr(self, "gaussian_kernel_size"):
+            depth_image = cv2.GaussianBlur(
+                depth_image, self.gaussian_kernel_size, self.gaussian_sigma, self.gaussian_sigma
             )
-            depth_input_msg.header.stamp = self.ros_node.get_clock().now().to_msg()
-            depth_input_msg.header.frame_id = "d435_depth_link"
-            self.depth_input_pub.publish(depth_input_msg)
 
-        return self._last_depth_images[self.depth_obs_indices, ...]
+        filt_m = np.clip(depth_image, self.depth_range[0], self.depth_range[1])
+        filt_norm = (filt_m - self.depth_range[0]) / (self.depth_range[1] - self.depth_range[0])
+
+        output_norm = filt_norm * (self.depth_output_range[1] - self.depth_output_range[0]) + self.depth_output_range[0]
+        self.depth_image_buffer.append(output_norm)
+
+    def _get_delayed_visualizable_image(self):
+        return self._get_depth_image_downsample_obs()
+
+    def _get_depth_image_downsample_obs(self):
+        self.refresh_depth_frame()
+        return self.depth_image_buffer.buffer[self.depth_obs_indices, ...]
 
     def _vis_depth_obs(self, depth_obs: np.ndarray):
         depth_tiles = (np.clip(depth_obs, 0.0, 1.0) * 255).astype(np.uint8)
@@ -477,63 +365,13 @@ class ParkourAgent(OnboardAgent):
         cv2.imwrite("depth_obs_grid.png", grid)
 
 
-class ParkourColdStartAgent(OnboardAgent):
-    def __init__(
-        self, logdir: str, dof_max_err: float, start_steps: int, ros_node: Ros2Real, joint_target_pos: np.array = None
-    ):
-        """Initialize the parkour cold start agent.
-        Args:
-            startup_step_size (float): The step size for the cold start agent to move the joints.
-            ros_node (Ros2Real): The ROS node instance to interact with the robot.
-        """
-        super().__init__(logdir, ros_node)
-        super()._parse_action_config()
-        self.ros_node = ros_node
-        self.dof_max_err = dof_max_err
-        self.start_steps = start_steps
-        self.joint_target_pos = np.zeros(self.ros_node.NUM_JOINTS) if joint_target_pos is None else joint_target_pos
-        self._p_gains = np.ones(self.ros_node.NUM_JOINTS, dtype=np.float32) * 40.0  # default p_gains
-        self._d_gains = np.zeros(self.ros_node.NUM_JOINTS, dtype=np.float32)  # default d_gains
-        # self._p_gains = self._p_gains * 2  # default p_gains
-        # self._d_gains = self._d_gains * 2  # default d_gains
-
-    def step(self) -> tuple[np.ndarray, bool]:
-        """Run a single step of the cold start agent. This will turn on the motors to a desired position.
-        The desired position is defined in the robot configuration.
-        """
-        if self.step_count < self.start_steps:
-            actions = self.start_dof_pos + self.dof_pos_err * (self.step_count + 1) / self.start_steps
-            done = False
-            self.step_count += 1
-        else:
-            dof_pos_err = self.joint_target_pos - self._get_joint_pos_rel_obs()
-            err_large_mask = np.abs(dof_pos_err) > self.dof_max_err
-            done = not err_large_mask.any()
-            if not done:
-                print(
-                    f"Current ColdStartAgent gets max error {np.round(np.max(np.abs(dof_pos_err)), decimals=2)}",
-                    end="\r",
-                )
-                raise SystemExit
-            else:
-                actions = np.zeros(self.ros_node.NUM_JOINTS)
-
-        return actions, done
-
-    def reset(self):
-        """Reset the agent."""
-        self.start_dof_pos = self._get_joint_pos_rel_obs()
-        self.dof_pos_err = self.joint_target_pos - self.start_dof_pos
-        self.step_count = 0
-
-
 class ParkourStandAgent(ParkourAgent):
     def __init__(
         self,
         logdir: str,
-        ros_node: Ros2Real,
+        ros_node: RealNode,
     ):
         super().__init__(logdir, ros_node)
 
-    def _start_rs_pipeline(self):
-        pass
+    def _get_depth_image_downsample_obs(self):
+        return np.zeros([len(self.depth_obs_indices), self.depth_height, self.depth_width])
