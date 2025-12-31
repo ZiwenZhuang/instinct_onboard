@@ -20,6 +20,8 @@ class G1ParkourNode(ParkourNode):
         self.current_agent_name: str | None = None
         self.stand_start_flag = False
         self.parkour_start_flag = False
+        self.main_loop_counter = 0
+        self.start_time = time.time()
 
     def register_agent(self, name: str, agent: OnboardAgent):
         self.available_agents[name] = agent
@@ -52,10 +54,12 @@ class G1ParkourNode(ParkourNode):
                 self.available_agents[self.current_agent_name].d_gains,
             )
         elif self.current_agent_name == "stand":
+            # cur_time=time.time()
 
             if self.parkour_start_flag:
                 action, done = self.available_agents["parkour"].step()
             else:
+                action, done = self.available_agents["parkour"].step()
                 action, done = self.available_agents[self.current_agent_name].step()
 
             if done:
@@ -78,6 +82,12 @@ class G1ParkourNode(ParkourNode):
                 self.available_agents[self.current_agent_name].p_gains,
                 self.available_agents[self.current_agent_name].d_gains,
             )
+            # print((time.time()-cur_time)*1000, "ms")
+        # self.main_loop_counter+=1
+        # if self.main_loop_counter == 500:
+        #     print(500/(time.time()-self.start_time), "hz")
+        #     self.main_loop_counter=0
+        #     self.start_time=time.time()
 
 
 def main(args):
@@ -136,7 +146,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--dof_max_err",
         type=float,
-        default=0.3,
+        default=1.0,
         help="Max dof error in start up (default: 0.01)",
     )
     parser.add_argument(

@@ -279,6 +279,7 @@ class Ros2Real(Node):
                 p_gains=p_gains,
                 d_gains=d_gains,
             )
+        # target_joint_pos=np.clip(a=target_joint_pos, a_max=self.joint_limits_high, a_min=self.joint_limits_low)
         self._publish_motor_cmd(target_joint_pos, p_gains=p_gains, d_gains=d_gains)
 
     """

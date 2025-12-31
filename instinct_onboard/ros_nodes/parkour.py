@@ -1,6 +1,8 @@
 import numpy as np
 from std_msgs.msg import Float32MultiArray
 
+import instinct_onboard.robot_cfgs as robot_cfgs
+
 from .ros_real import Ros2Real
 
 
@@ -8,7 +10,9 @@ class ParkourNodeMixin:
     def __init__(self, *args, depth_latent_topic: str = "/depth_latent", **kwargs):
         """Initialize the ParkourNodeMixin with the depth latent topic."""
         super().__init__(*args, **kwargs)
-        self.joy_stick_command = [0, 0, 0, 0]
+        self.joy_stick_command = [0, 0, 0, 0]  # [lx, ly, rx, ry]
+        self.joy_stick_counter = [0, 0, 0, 0]  # [up, down, left, right]
+        self.joy_stick_button_flag = [False, False, False, False]  # [up, down, left, right]
         self.depth_latent_topic = depth_latent_topic
         self.depth_latent_buffer = None
 
@@ -24,6 +28,35 @@ class ParkourNodeMixin:
     def _joy_stick_callback(self, msg):
         super()._joy_stick_callback(msg)
         self.joy_stick_command = [msg.lx, msg.ly, msg.rx, msg.ry]
+        buttons = robot_cfgs.WirelessButtons
+
+        if msg.keys & buttons.up:
+            if not self.joy_stick_button_flag[0]:
+                self.joy_stick_counter[0] += 1
+                self.joy_stick_button_flag[0] = True
+        else:
+            self.joy_stick_button_flag[0] = False
+
+        if msg.keys & buttons.down:
+            if not self.joy_stick_button_flag[1]:
+                self.joy_stick_counter[1] += 1
+                self.joy_stick_button_flag[1] = True
+        else:
+            self.joy_stick_button_flag[1] = False
+
+        if msg.keys & buttons.left:
+            if not self.joy_stick_button_flag[2]:
+                self.joy_stick_counter[2] += 1
+                self.joy_stick_button_flag[2] = True
+        else:
+            self.joy_stick_button_flag[2] = False
+
+        if msg.keys & buttons.right:
+            if not self.joy_stick_button_flag[3]:
+                self.joy_stick_counter[3] += 1
+                self.joy_stick_button_flag[3] = True
+        else:
+            self.joy_stick_button_flag[3] = False
 
     def _depth_latent_callback(self, msg: Float32MultiArray):
         """Callback for the depth latent topic."""

@@ -20,6 +20,8 @@ from instinct_onboard.agents.base import OnboardAgent
 from instinct_onboard.ros_nodes.ros_real import Ros2Real
 from instinct_onboard.utils import CircularBuffer
 
+PUBLISH_DEPTH = False
+
 
 def depth_worker(queue, config):
     rs_pipeline = rs.pipeline()
@@ -36,15 +38,14 @@ def depth_worker(queue, config):
     depth_image_buffer = CircularBuffer(length=config["rs_frequency"])
 
     while True:
-        # print("Current time:", time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()))
-        # read from pyrealsense2, preprocess and write the model latent to the buffer
-        rs_frame = rs_pipeline.wait_for_frames()  # ms
-        # frame_timestamp = rs_frame.get_timestamp()
-        depth_frame = rs_frame.get_depth_frame()
-        # current_time_ms = int(time.time() * 1000)
-        # print("RealSense frame retrieval time: {:.4f} ms, current time: {} ms.".format(frame_timestamp, current_time_ms))
-        if not depth_frame:
-            raise RuntimeError("No depth frame")
+        try:
+            rs_frame = rs_pipeline.wait_for_frames(timeout_ms=300)  # ms
+            depth_frame = rs_frame.get_depth_frame()
+            if not depth_frame:
+                raise RuntimeError("No depth frame")
+        except RuntimeError as e:
+            print("Camera Error!")
+            raise RuntimeError("Camera disconnected") from e
         # start_get = time.time()
         depth_image_np = np.asanyarray(depth_frame.get_data(), dtype=np.float32) * depth_scale
         # depth_input_msg = rnp.msgify(Image, np.asanyarray(depth_image_np/self.depth_scale, dtype=np.uint16), encoding="16UC1")
@@ -94,7 +95,6 @@ class ParkourAgent(OnboardAgent):
     rs_resolution = (480, 270)
     rs_frequency = 60
     visualize_depth = False
-    publish_depth = True
 
     def __init__(
         self,
@@ -112,7 +112,13 @@ class ParkourAgent(OnboardAgent):
         self.cmd_ny_range = [0.0, 0.0]
         self.cmd_pyaw_range = [0.0, 1.0]
         self.cmd_nyaw_range = [0.0, 1.0]
-        self.move_by_wireless_remote = True
+        self.depth_input_pub = self.ros_node.create_publisher(
+            Image,
+            "/depth_image",
+            1,
+        )
+        self.move_by_wireless_remote = False
+        self.move_by_wireless_buttons = True
         self._parse_obs_config()
         self._parse_action_config()
         self._parse_depth_image_config()
@@ -120,12 +126,6 @@ class ParkourAgent(OnboardAgent):
         self._start_rs_pipeline()
         # self._depth_thread = threading.Thread(target=self.get_depth_frame, daemon=True)
         # self._depth_thread.start()
-
-        self.depth_input_pub = self.ros_node.create_publisher(
-            Image,
-            "/depth_image",
-            1,
-        )
 
     def _parse_obs_config(self):
         super()._parse_obs_config()
@@ -232,6 +232,7 @@ class ParkourAgent(OnboardAgent):
                 return
             else:
                 raise ValueError(f"Unknown observation function for observation {obs_name}")
+        self.xyyaw_command = np.array([0.0, 0.0, 0.0], dtype=np.float32)
         return super()._parse_observation_function(obs_name, obs_config)
 
     def _load_models(self):
@@ -406,6 +407,26 @@ class ParkourAgent(OnboardAgent):
             self.xyyaw_command = np.array([vx, vy, yaw], dtype=np.float32)
             return self.xyyaw_command
 
+        elif self.move_by_wireless_buttons:
+            self.xyyaw_command[0] = self.ros_node.joy_stick_counter[0] * 0.5 - self.ros_node.joy_stick_counter[1] * 0.5
+            self.xyyaw_command[1] = 0
+            # right-x for turning left/right
+            joy_stick_command = self.ros_node.joy_stick_command  # [Lx, Ly, Rx, Ry]
+            rx = -joy_stick_command[2]
+            if rx > self.ang_vel_deadband:
+                yaw = (rx - self.ang_vel_deadband) / (1 - self.ang_vel_deadband)
+                yaw = yaw * (self.cmd_pyaw_range[1] - self.cmd_pyaw_range[0]) + self.cmd_pyaw_range[0]
+            elif rx < -self.ang_vel_deadband:
+                yaw = (rx + self.ang_vel_deadband) / (1 - self.ang_vel_deadband)
+                yaw = yaw * (self.cmd_nyaw_range[1] - self.cmd_nyaw_range[0]) - self.cmd_nyaw_range[0]
+            else:
+                yaw = 0
+
+            self.xyyaw_command[0] = np.clip(self.xyyaw_command[0], 0, 3.0)
+            self.xyyaw_command[1] = 0.0
+            self.xyyaw_command[2] = yaw
+            return self.xyyaw_command
+
     def _get_joint_vel_rel_obs(self):
         """Return shape: (num_joints,)"""
         return self.ros_node.joint_vel_
@@ -433,10 +454,20 @@ class ParkourAgent(OnboardAgent):
 
         if self._last_depth_images is None:
             return np.zeros((len(self.depth_obs_indices), self.depth_height, self.depth_width), dtype=np.float32)
+
+        depth_image = self._last_depth_images[-1, ...]
+        if PUBLISH_DEPTH:
+            depth_input_msg = rnp.msgify(
+                Image, np.asanyarray(depth_image * 2.5 * 1000, dtype=np.uint16), encoding="16UC1"
+            )
+            depth_input_msg.header.stamp = self.ros_node.get_clock().now().to_msg()
+            depth_input_msg.header.frame_id = "d435_depth_link"
+            self.depth_input_pub.publish(depth_input_msg)
+
         return self._last_depth_images[self.depth_obs_indices, ...]
 
     def _vis_depth_obs(self, depth_obs: np.ndarray):
-        depth_tiles = (np.clip(depth_obs[0], 0.0, 1.0) * 255).astype(np.uint8)
+        depth_tiles = (np.clip(depth_obs, 0.0, 1.0) * 255).astype(np.uint8)
         rows, cols = 2, 4
         tile_h, tile_w = depth_tiles.shape[1], depth_tiles.shape[2]
         grid = np.zeros((rows * tile_h, cols * tile_w), dtype=np.uint8)
@@ -461,7 +492,7 @@ class ParkourColdStartAgent(OnboardAgent):
         self.dof_max_err = dof_max_err
         self.start_steps = start_steps
         self.joint_target_pos = np.zeros(self.ros_node.NUM_JOINTS) if joint_target_pos is None else joint_target_pos
-        self._p_gains = np.ones(self.ros_node.NUM_JOINTS, dtype=np.float32) * 10.0  # default p_gains
+        self._p_gains = np.ones(self.ros_node.NUM_JOINTS, dtype=np.float32) * 40.0  # default p_gains
         self._d_gains = np.zeros(self.ros_node.NUM_JOINTS, dtype=np.float32)  # default d_gains
         # self._p_gains = self._p_gains * 2  # default p_gains
         # self._d_gains = self._d_gains * 2  # default d_gains
