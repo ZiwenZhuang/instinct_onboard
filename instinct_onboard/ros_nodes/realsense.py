@@ -178,6 +178,27 @@ class RsCameraNodeMixin:
                 fps=self.rs_fps,
             )
 
+    def restart_camera(self):
+        """Restart the camera (process), but reusing the resources as much as possible.
+        In individual process case, reusing buffers preventing empty data.
+        """
+        self.get_logger().info("Restarting RealSense camera.")
+        if self.camera_individual_process:
+            # Only restart the camera process while reusing the shared memory buffer.
+            self.camera_process.terminate()
+            self.camera_process = mp.Process(
+                target=camera_process_func,
+                args=(
+                    self.rs_resolution,
+                    self.rs_fps,
+                    self.rs_shared_memory.name,
+                    self.camera_process_affinity,
+                ),
+                daemon=True,
+            )
+        else:
+            self.initialize_camera()
+
     def refresh_rs_data(self) -> bool:
         """Currently refresh the depth data only."""
         refreshed = False
