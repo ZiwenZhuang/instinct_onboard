@@ -24,14 +24,13 @@ from instinct_onboard.utils import CircularBuffer
 class ParkourAgent(OnboardAgent):
     rs_resolution = (480, 270)
     rs_frequency = 60
-    visualize_depth = False
 
     def __init__(
         self,
         logdir: str,
         ros_node: RealNode,
-        depth_vis: bool = False,
-        pointcloud_vis: bool = False,
+        depth_vis: bool = True,
+        pointcloud_vis: bool = True,
         move_by_wireless_buttons: bool = True,
     ):
         super().__init__(logdir, ros_node)
@@ -44,17 +43,11 @@ class ParkourAgent(OnboardAgent):
         self.cmd_ny_range = [0.0, 0.0]
         self.cmd_pyaw_range = [0.0, 1.0]
         self.cmd_nyaw_range = [0.0, 1.0]
-        self.depth_input_pub = self.ros_node.create_publisher(
-            Image,
-            "/depth_image",
-            1,
-        )
         self.move_by_wireless_remote = not move_by_wireless_buttons
         self.move_by_wireless_buttons = move_by_wireless_buttons
         self._parse_obs_config()
         self._parse_action_config()
         self._load_models()
-        # self._start_rs_pipeline()
         self.depth_vis = depth_vis
         if self.depth_vis:
             self.debug_depth_publisher = self.ros_node.create_publisher(Image, "/realsense/depth_image", 10)
@@ -193,7 +186,6 @@ class ParkourAgent(OnboardAgent):
         pass
 
     def step(self):
-        # cur_time=time.time()
         """Perform a single step of the agent."""
         # pack actor MLP input
         proprio_obs = []
@@ -207,25 +199,24 @@ class ParkourAgent(OnboardAgent):
             .reshape(1, -1, self.depth_height, self.depth_width)
             .astype(np.float32)
         )
-        if self.depth_vis:
-            self._vis_depth_obs(depth_obs.reshape(-1, self.depth_height, self.depth_width))
+        # if self.depth_vis:
+        #     self._vis_depth_obs(depth_obs.reshape(-1, self.depth_height, self.depth_width))
         if self.debug_depth_publisher is not None:
             # NOTE: the +5.0 is a empirical value to ensure the normalized obs is not negative.
             # Not using normalizer's value is to prevent further visualization code bugs.
             depth_image_msg_data = np.asanyarray(
-                depth_obs[-1].reshape(*self.depth_image_final_resolution) * 255 * 2,
+                depth_obs[0, -1].reshape(self.depth_height, self.depth_width) * 255 * 2,
                 dtype=np.uint16,
             )
             depth_image_msg = rnp.msgify(Image, depth_image_msg_data, encoding="16UC1")
             self.debug_depth_publisher.publish(depth_image_msg)
         if self.debug_pointcloud_publisher is not None:
             pointcloud_msg = self.create_pointcloud_msg(
-                depth_obs[-1].reshape(*self.depth_image_final_resolution) * self.depth_image_clip_range[1]
-                + self.depth_image_clip_range[0]
+                depth_obs[0, -1].reshape(self.depth_height, self.depth_width) * self.depth_range[1]
+                + self.depth_range[0]
             )
             self.debug_pointcloud_publisher.publish(pointcloud_msg)
 
-        # depth_obs*=0.
         depth_image_output = self.ort_sessions["depth_encoder"].run(
             None, {self.ort_sessions["depth_encoder"].get_inputs()[0].name: depth_obs}
         )[0]
@@ -238,7 +229,6 @@ class ParkourAgent(OnboardAgent):
         mask = (self._zero_action_joints == 0).astype(bool)
         full_action = np.zeros(self.ros_node.NUM_ACTIONS, dtype=np.float32)
         full_action[mask] = action
-        # print(time.time()-cur_time)
 
         return full_action, False
 
@@ -364,6 +354,63 @@ class ParkourAgent(OnboardAgent):
             grid[r * tile_h : (r + 1) * tile_h, c * tile_w : (c + 1) * tile_w] = depth_tiles[idx]
         cv2.imwrite("depth_obs_grid.png", grid)
 
+    def create_pointcloud_msg(self, depth_data: np.ndarray) -> PointCloud2:
+        height, width = depth_data.shape
+        vfov_deg = 58.0
+        vfov_rad = np.deg2rad(vfov_deg)
+        f = (height / 2.0) / np.tan(vfov_rad / 2.0)  # focal length in pixels (assuming fy = f)
+
+        # Assuming square pixels, fx = fy = f, cx = width/2, cy = height/2
+        cx = width / 2.0
+        cy = height / 2.0
+
+        # Create grid of pixel coordinates
+        u, v = np.meshgrid(np.arange(width), np.arange(height))
+
+        depth = depth_data.astype(np.float32)
+
+        x = (u - cx) * depth / f
+        y = (v - cy) * depth / f
+        z = depth
+
+        # Stack to (H*W, 3)
+        points = np.stack((x, y, z), axis=-1).reshape(-1, 3)
+
+        # Filter invalid points (depth == 0)
+        valid = (z > 0).flatten()
+        points = points[valid]
+
+        # Apply 90-degree rotation around +Y axis: new_x = z, new_y = y, new_z = -x
+        rotated_points = np.empty_like(points)
+        rotated_points[:, 0] = points[:, 2]  # new_x = old_z
+        rotated_points[:, 1] = points[:, 1]  # new_y = old_y
+        rotated_points[:, 2] = -points[:, 0]  # new_z = -old_x
+
+        # Apply additional -90 degree rotation around +X axis: final_x = rotated_x, final_y = rotated_z, final_z = -rotated_y
+        final_points = np.empty_like(rotated_points)
+        final_points[:, 0] = rotated_points[:, 0]
+        final_points[:, 1] = rotated_points[:, 2]
+        final_points[:, 2] = -rotated_points[:, 1]
+
+        # Create PointCloud2
+        msg = PointCloud2()
+        msg.header.stamp = self.ros_node.get_clock().now().to_msg()
+        msg.header.frame_id = "d435_depth_link"
+        msg.height = 1
+        msg.width = len(final_points)
+        msg.fields = [
+            PointField(name="x", offset=0, datatype=PointField.FLOAT32, count=1),
+            PointField(name="y", offset=4, datatype=PointField.FLOAT32, count=1),
+            PointField(name="z", offset=8, datatype=PointField.FLOAT32, count=1),
+        ]
+        msg.is_bigendian = False
+        msg.point_step = 12  # 3 floats * 4 bytes
+        msg.row_step = msg.point_step * msg.width
+        msg.is_dense = True
+        msg.data = final_points.astype(np.float32).tobytes()
+
+        return msg
+
 
 class ParkourStandAgent(ParkourAgent):
     def __init__(
@@ -371,7 +418,7 @@ class ParkourStandAgent(ParkourAgent):
         logdir: str,
         ros_node: RealNode,
     ):
-        super().__init__(logdir, ros_node)
+        super().__init__(logdir, ros_node, depth_vis=False, pointcloud_vis=False)
 
     def _get_depth_image_downsample_obs(self):
         return np.zeros([len(self.depth_obs_indices), self.depth_height, self.depth_width])
