@@ -4,13 +4,11 @@ import ctypes
 import multiprocessing as mp
 import multiprocessing.shared_memory as mp_shm
 import os
-import queue
 import time
+from typing import Literal
 
-import cv2
 import numpy as np
 import pyrealsense2 as rs
-from rclpy.callback_groups import ReentrantCallbackGroup
 
 from .unitree import UnitreeNode
 
@@ -121,6 +119,7 @@ class RsCameraNodeMixin:
         rs_resolution: tuple[int, int] = (480, 270),  # (width, height)
         rs_fps: int = 60,
         camera_individual_process: bool = False,
+        camera_dead_behavior: Literal["restart", "raise_error", "none"] = "restart",
         main_process_affinity: set[int] | None = None,
         camera_process_affinity: set[int] | None = None,
         **kwargs,
@@ -130,6 +129,7 @@ class RsCameraNodeMixin:
         self.rs_resolution = rs_resolution
         self.rs_fps = rs_fps
         self.camera_individual_process = camera_individual_process
+        self.camera_dead_behavior = camera_dead_behavior
         self.main_process_affinity = main_process_affinity
         self.camera_process_affinity = camera_process_affinity
         self.camera = None
@@ -182,11 +182,16 @@ class RsCameraNodeMixin:
         """Currently refresh the depth data only."""
         refreshed = False
         if self.camera_individual_process:
-            if self.camera_process is None:
-                raise ValueError("Camera not initialized. Call initialize_camera first.")
-            # Check if process is alive
-            if not self.camera_process.is_alive():
-                raise ValueError("Camera process is not alive. Exiting.")
+            if self.camera_process is None or not self.camera_process.is_alive():
+                if self.camera_dead_behavior == "restart":
+                    self.get_logger().error("Camera process is not alive. Restarting one.")
+                    self.initialize_camera()
+                elif self.camera_dead_behavior == "raise_error":
+                    raise RuntimeError("Camera process is not alive. Exiting.")
+                elif self.camera_dead_behavior == "none":
+                    self.get_logger().warn("Camera process is not alive. User chose to do nothing")
+                else:
+                    raise ValueError(f"Invalid camera process dead behavior: {self.camera_dead_behavior}")
             # Dump queue and get latest
             if self.rs_shared_header.writer_status == 0:
                 rs_timestamp = self.rs_shared_header.timestamp
@@ -198,7 +203,15 @@ class RsCameraNodeMixin:
             self.rs_data_fresh_counter += 1
         else:
             if self.camera is None:
-                raise ValueError("Camera not initialized. Call initialize_camera first.")
+                if self.camera_dead_behavior == "restart":
+                    self.get_logger().error("Camera not initialized. Restarting one.")
+                    self.initialize_camera()
+                elif self.camera_dead_behavior == "raise_error":
+                    raise RuntimeError("Camera not initialized. Exiting.")
+                elif self.camera_dead_behavior == "none":
+                    self.get_logger().warn("Camera process is not alive. User chose to do nothing")
+                else:
+                    raise ValueError(f"Invalid camera dead behavior: {self.camera_dead_behavior}")
             self.rs_depth_data = self.camera.get_camera_data()  # (height, width)
             refreshed = True
         return refreshed
