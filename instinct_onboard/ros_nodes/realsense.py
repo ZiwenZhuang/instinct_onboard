@@ -185,7 +185,6 @@ class RsCameraNodeMixin:
         self.get_logger().info("Restarting RealSense camera.")
         if self.camera_individual_process:
             # Only restart the camera process while reusing the shared memory buffer.
-            self.camera_process.terminate()
             self.camera_process = mp.Process(
                 target=camera_process_func,
                 args=(
@@ -196,6 +195,7 @@ class RsCameraNodeMixin:
                 ),
                 daemon=True,
             )
+            self.camera_process.start()
         else:
             self.initialize_camera()
 
