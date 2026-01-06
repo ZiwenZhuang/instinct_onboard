@@ -13,12 +13,12 @@ from instinct_onboard import robot_cfgs
 @dataclass
 class JoyStickData:
     # None for not available
-    lx: Optional[float] = None
-    ly: Optional[float] = None
-    rx: Optional[float] = None
-    ry: Optional[float] = None
-    left_trigger: Optional[float] = None
-    right_trigger: Optional[float] = None
+    lx: Optional[float] = None  # + for stick right, - for stick left
+    ly: Optional[float] = None  # + for stick up, - for stick down
+    rx: Optional[float] = None  # + for stick right, - for stick left
+    ry: Optional[float] = None  # + for stick up, - for stick down
+    left_trigger: Optional[float] = None  # + for trigger pressed, - for trigger released, but could be ranging (0, 1)
+    right_trigger: Optional[float] = None  # + for trigger pressed, - for trigger released, but could be ranging (0, 1)
 
     # True for pressed, False for released
     up: Optional[bool] = None
