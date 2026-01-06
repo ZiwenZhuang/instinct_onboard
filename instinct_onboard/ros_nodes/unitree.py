@@ -77,7 +77,7 @@ class UnitreeNode(RealNode):
 
     def check_buffers_ready(self):
         """Check if all the necessary buffers are ready to use. Only used at the the end of the start_ros_handlers."""
-        buffer_ready = hasattr(self, "low_state_buffer") and hasattr(self, "joy_stick_buffer")
+        buffer_ready = hasattr(self, "low_state_buffer") and self.joy_stick_data.lx is not None
         if self.imu_state_topic is not None:
             buffer_ready = buffer_ready and hasattr(self, "torso_imu_buffer")
         return buffer_ready

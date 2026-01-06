@@ -1,5 +1,6 @@
 from abc import abstractmethod
 from dataclasses import dataclass
+from typing import Optional
 
 import numpy as np
 import rclpy
@@ -12,27 +13,28 @@ from instinct_onboard import robot_cfgs
 @dataclass
 class JoyStickData:
     # None for not available
-    lx: float | None = None
-    ly: float | None = None
-    rx: float | None = None
-    ry: float | None = None
-    left_trigger: float | None = None
-    right_trigger: float | None = None
+    lx: Optional[float] = None
+    ly: Optional[float] = None
+    rx: Optional[float] = None
+    ry: Optional[float] = None
+    left_trigger: Optional[float] = None
+    right_trigger: Optional[float] = None
+
     # True for pressed, False for released
-    up: bool | None = None
-    down: bool | None = None
-    left: bool | None = None
-    right: bool | None = None
-    A: bool | None = None
-    B: bool | None = None
-    X: bool | None = None
-    Y: bool | None = None
-    start: bool | None = None
-    select: bool | None = None
-    L1: bool | None = None
-    L2: bool | None = None
-    R1: bool | None = None
-    R2: bool | None = None
+    up: Optional[bool] = None
+    down: Optional[bool] = None
+    left: Optional[bool] = None
+    right: Optional[bool] = None
+    A: Optional[bool] = None
+    B: Optional[bool] = None
+    X: Optional[bool] = None
+    Y: Optional[bool] = None
+    start: Optional[bool] = None
+    select: Optional[bool] = None
+    L1: Optional[bool] = None
+    L2: Optional[bool] = None
+    R1: Optional[bool] = None
+    R2: Optional[bool] = None
 
 
 class RealNode(Node):
