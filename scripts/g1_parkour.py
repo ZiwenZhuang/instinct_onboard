@@ -111,6 +111,7 @@ class G1ParkourNode(UnitreeRsCameraNode):
 
         elif self.current_agent_name == "stand":
             action, done = self.available_agents[self.current_agent_name].step()
+            self.refresh_rs_data()
             self.send_action(
                 action,
                 self.available_agents[self.current_agent_name].action_offset,
