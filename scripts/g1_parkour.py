@@ -13,7 +13,6 @@ from instinct_onboard.agents.parkour_agent import (
     ParkourAgent,
     ParkourStandAgent,
 )
-from instinct_onboard.robot_cfgs import WirelessButtons
 from instinct_onboard.ros_nodes.realsense import UnitreeRsCameraNode
 
 MAIN_LOOP_FREQUENCY_CHECK_INTERVAL = 500
@@ -31,7 +30,7 @@ class G1ParkourNode(UnitreeRsCameraNode):
     def _joy_stick_callback(self, msg):
         super()._joy_stick_callback(msg)
         self.joy_stick_command = [msg.lx, msg.ly, msg.rx, msg.ry]
-        buttons = robot_cfgs.WirelessButtons
+        buttons = robot_cfgs.UnitreeWirelessButtons
 
         if msg.keys & buttons.up:
             if not self.joy_stick_button_flag[0]:
@@ -104,7 +103,7 @@ class G1ParkourNode(UnitreeRsCameraNode):
                 self.available_agents[self.current_agent_name].p_gains,
                 self.available_agents[self.current_agent_name].d_gains,
             )
-            if done and (self.joy_stick_buffer.keys & WirelessButtons.R1):
+            if done and (self.joy_stick_data.R1):
                 self.get_logger().info("R1 button pressed, switching to stand agent.")
                 self.current_agent_name = "stand"
                 self.available_agents[self.current_agent_name].reset()
@@ -119,7 +118,7 @@ class G1ParkourNode(UnitreeRsCameraNode):
                 self.available_agents[self.current_agent_name].p_gains,
                 self.available_agents[self.current_agent_name].d_gains,
             )
-            if self.joy_stick_buffer.keys & WirelessButtons.L1:
+            if self.joy_stick_data.L1:
                 self.get_logger().info("L1 button pressed, switching to parkour agent.")
                 self.current_agent_name = "parkour"
                 self.available_agents[self.current_agent_name].reset()
@@ -133,7 +132,7 @@ class G1ParkourNode(UnitreeRsCameraNode):
                 self.available_agents[self.current_agent_name].p_gains,
                 self.available_agents[self.current_agent_name].d_gains,
             )
-            if self.joy_stick_buffer.keys & WirelessButtons.R1:
+            if self.joy_stick_data.R1:
                 self.get_logger().info("R1 button pressed, switching to stand agent.")
                 self.current_agent_name = "stand"
                 self.available_agents[self.current_agent_name].reset()

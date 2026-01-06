@@ -13,7 +13,6 @@ from tf2_ros import TransformBroadcaster
 from instinct_onboard.agents.base import ColdStartAgent
 from instinct_onboard.agents.tracking_agent import PerceptiveTrackerAgent, TrackerAgent
 from instinct_onboard.agents.walk_agent import WalkAgent
-from instinct_onboard.robot_cfgs import WirelessButtons
 from instinct_onboard.ros_nodes.realsense import UnitreeRsCameraNode
 
 MAIN_LOOP_FREQUENCY_CHECK_INTERVAL = 500
@@ -56,7 +55,7 @@ class G1TrackingNode(UnitreeRsCameraNode):
             self.available_agents[self.current_agent_name].reset()
             return
 
-        if self.joy_stick_buffer.keys & WirelessButtons.A:
+        if self.joy_stick_data.A:
             self.get_logger().info("A button pressed, matching motion to current heading.", throttle_duration_sec=2.0)
             self.available_agents["tracking"].match_to_current_heading()
 
@@ -78,11 +77,11 @@ class G1TrackingNode(UnitreeRsCameraNode):
                 self.available_agents[self.current_agent_name].p_gains,
                 self.available_agents[self.current_agent_name].d_gains,
             )
-            if done and (self.joy_stick_buffer.keys & WirelessButtons.L1):
+            if done and (self.joy_stick_data.L1):
                 self.get_logger().info("L1 button pressed, switching to walk agent.")
                 self.current_agent_name = "walk"
                 self.available_agents[self.current_agent_name].reset()
-            if done and (self.joy_stick_buffer.keys & WirelessButtons.up):
+            if done and (self.joy_stick_data.up):
                 if "walk" in self.available_agents.keys():
                     self.get_logger().warn("up button pressed, but there is a walk agent registered. ignored")
 
@@ -95,23 +94,23 @@ class G1TrackingNode(UnitreeRsCameraNode):
                 self.available_agents[self.current_agent_name].p_gains,
                 self.available_agents[self.current_agent_name].d_gains,
             )
-            if self.joy_stick_buffer.keys & WirelessButtons.up:
+            if self.joy_stick_data.up:
                 self.get_logger().info("up button pressed, switching to tracking agent.")
                 self.current_agent_name = "tracking"
                 self.available_agents[self.current_agent_name].reset("diveroll4-ziwen-0-retargeted.npz")
-            elif self.joy_stick_buffer.keys & WirelessButtons.down:
+            elif self.joy_stick_data.down:
                 self.get_logger().info("down button pressed, switching to tracking agent.")
                 self.current_agent_name = "tracking"
                 self.available_agents[self.current_agent_name].reset("kneelClimbStep1-x-0.1-ziwen-retargeted.npz")
-            elif self.joy_stick_buffer.keys & WirelessButtons.left:
+            elif self.joy_stick_data.left:
                 self.get_logger().info("left button pressed, switching to tracking agent.")
                 self.current_agent_name = "tracking"
                 self.available_agents[self.current_agent_name].reset("rollVault11-ziwen-retargeted.npz")
-            elif self.joy_stick_buffer.keys & WirelessButtons.right:
+            elif self.joy_stick_data.right:
                 self.get_logger().info("right button pressed, switching to tracking agent.")
                 self.current_agent_name = "tracking"
                 self.available_agents[self.current_agent_name].reset("jumpsit2-ziwen-retargeted.npz")
-            elif self.joy_stick_buffer.keys & WirelessButtons.X:
+            elif self.joy_stick_data.X:
                 self.get_logger().info("right button pressed, switching to tracking agent.")
                 self.current_agent_name = "tracking"
                 self.available_agents[self.current_agent_name].reset("superheroLanding-retargeted.npz")
@@ -125,7 +124,7 @@ class G1TrackingNode(UnitreeRsCameraNode):
                 self.available_agents[self.current_agent_name].p_gains,
                 self.available_agents[self.current_agent_name].d_gains,
             )
-            if self.joy_stick_buffer.keys & WirelessButtons.L1:
+            if self.joy_stick_data.L1:
                 self.get_logger().info(
                     "L1 button pressed, switching to walk agent (no matter whether the tracking agent is done)."
                 )

@@ -121,14 +121,34 @@ class UnitreeNode(RealNode):
 
     def _joy_stick_callback(self, msg):
         self.get_logger().info("Wireless controller data received.", once=True)
-        self.joy_stick_buffer = msg
+        # fill the joy stick data
+        self.joy_stick_data.A = bool(msg.keys & robot_cfgs.UnitreeWirelessButtons.A)
+        self.joy_stick_data.B = bool(msg.keys & robot_cfgs.UnitreeWirelessButtons.B)
+        self.joy_stick_data.X = bool(msg.keys & robot_cfgs.UnitreeWirelessButtons.X)
+        self.joy_stick_data.Y = bool(msg.keys & robot_cfgs.UnitreeWirelessButtons.Y)
+        self.joy_stick_data.start = bool(msg.keys & robot_cfgs.UnitreeWirelessButtons.start)
+        self.joy_stick_data.select = bool(msg.keys & robot_cfgs.UnitreeWirelessButtons.select)
+        self.joy_stick_data.L1 = bool(msg.keys & robot_cfgs.UnitreeWirelessButtons.L1)
+        self.joy_stick_data.R1 = bool(msg.keys & robot_cfgs.UnitreeWirelessButtons.R1)
+        self.joy_stick_data.L2 = bool(msg.keys & robot_cfgs.UnitreeWirelessButtons.L2)
+        self.joy_stick_data.R2 = bool(msg.keys & robot_cfgs.UnitreeWirelessButtons.R2)
+        self.joy_stick_data.up = bool(msg.keys & robot_cfgs.UnitreeWirelessButtons.up)
+        self.joy_stick_data.down = bool(msg.keys & robot_cfgs.UnitreeWirelessButtons.down)
+        self.joy_stick_data.left = bool(msg.keys & robot_cfgs.UnitreeWirelessButtons.left)
+        self.joy_stick_data.right = bool(msg.keys & robot_cfgs.UnitreeWirelessButtons.right)
+        # fill the joy stick data
+        self.joy_stick_data.lx = msg.lx
+        self.joy_stick_data.ly = msg.ly
+        self.joy_stick_data.rx = msg.rx
+        self.joy_stick_data.ry = msg.ry
+        # left/right trigger is not available in Unitree Wireless Controller
 
         # refer to Unitree Remote Control data structure, msg.keys is a bit mask
         # 00000000 00000001 means pressing the 0-th button (R1)
         # 00000000 00000010 means pressing the 1-th button (L1)
         # 10000000 00000000 means pressing the 15-th button (left)
-        if (msg.keys & robot_cfgs.WirelessButtons.R2) or (
-            msg.keys & robot_cfgs.WirelessButtons.L2
+        if (msg.keys & robot_cfgs.UnitreeWirelessButtons.R2) or (
+            msg.keys & robot_cfgs.UnitreeWirelessButtons.L2
         ):  # R2 or L2 is pressed
             self.get_logger().warn("R2 or L2 is pressed, the motors and this process shuts down.")
             self._turn_off_motors()

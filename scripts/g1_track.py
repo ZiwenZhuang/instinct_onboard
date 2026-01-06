@@ -10,7 +10,6 @@ from tf2_ros import TransformBroadcaster
 
 from instinct_onboard.agents.base import ColdStartAgent
 from instinct_onboard.agents.tracking_agent import TrackerAgent
-from instinct_onboard.robot_cfgs import WirelessButtons
 from instinct_onboard.ros_nodes.unitree import UnitreeNode
 
 
@@ -44,7 +43,7 @@ class G1TrackingNode(UnitreeNode):
             self.available_agents[self.current_agent_name].reset()
             return
 
-        if self.joy_stick_buffer.keys & WirelessButtons.A:
+        if self.joy_stick_data.A:
             self.get_logger().info("A button pressed, matching motion to current heading.", throttle_duration_sec=2.0)
             self.available_agents["tracking"].match_to_current_heading()
 
@@ -61,7 +60,7 @@ class G1TrackingNode(UnitreeNode):
                 self.available_agents[self.current_agent_name].p_gains,
                 self.available_agents[self.current_agent_name].d_gains,
             )
-            if done and (self.joy_stick_buffer.keys & WirelessButtons.L1):
+            if done and (self.joy_stick_data.L1):
                 self.get_logger().info("L1 button pressed, switching to tracking agent.")
                 self.current_agent_name = "tracking"
                 self.available_agents[self.current_agent_name].reset()
