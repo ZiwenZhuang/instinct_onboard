@@ -1,4 +1,5 @@
 from abc import abstractmethod
+from dataclasses import dataclass
 
 import numpy as np
 import rclpy
@@ -8,10 +9,38 @@ from std_msgs.msg import Float32MultiArray, String
 from instinct_onboard import robot_cfgs
 
 
+@dataclass
+class JoyStickData:
+    # None for not available
+    lx: float | None = None
+    ly: float | None = None
+    rx: float | None = None
+    ry: float | None = None
+    left_trigger: float | None = None
+    right_trigger: float | None = None
+    # True for pressed, False for released
+    up: bool | None = None
+    down: bool | None = None
+    left: bool | None = None
+    right: bool | None = None
+    A: bool | None = None
+    B: bool | None = None
+    X: bool | None = None
+    Y: bool | None = None
+    start: bool | None = None
+    select: bool | None = None
+    L1: bool | None = None
+    L2: bool | None = None
+    R1: bool | None = None
+    R2: bool | None = None
+
+
 class RealNode(Node):
     """This is the basic implementation of handling ROS messages matching the design of IsaacLab.
     It is designed to be used in the script directly to run the ONNX function. But please handle the
     impl of combining observations in the agent implementation.
+
+    This also defines the most common features for each OEM node, and the agents should use this interface to interact with the robot.
     """
 
     def __init__(
@@ -38,6 +67,10 @@ class RealNode(Node):
         self.torque_limits_ratio = torque_limits_ratio
         self.robot_class_name = robot_class_name
         self.dryrun = dryrun
+        # This is a common joy stick data definition for multi-robot support.
+        # Each OEM node should handle how to convert the raw joy stick data to this common definition.
+        # Each agent should use this interface to acquire joy stick continuous values and button states.
+        self._joy_stick_data = JoyStickData()
 
         self.parse_config()
 
@@ -81,6 +114,10 @@ class RealNode(Node):
         # Common publishers
         self.debug_msg_publisher = self.create_publisher(String, "/debug_msg", 10)
         self.action_publisher = self.create_publisher(Float32MultiArray, "/raw_actions", 10)
+
+    @property
+    def joy_stick_data(self) -> JoyStickData:
+        return self._joy_stick_data
 
     """
     Get observation term from the corresponding buffers

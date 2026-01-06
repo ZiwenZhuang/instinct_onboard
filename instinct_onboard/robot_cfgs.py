@@ -3,7 +3,7 @@ import numpy as np
 """A general configuration file for the robots, shared between different scripts. """
 
 
-class WirelessButtons:
+class UnitreeWirelessButtons:
     R1 = 0b00000001  # 1
     L1 = 0b00000010  # 2
     start = 0b00000100  # 4
