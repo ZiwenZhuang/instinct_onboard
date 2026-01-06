@@ -31,17 +31,21 @@ class ParkourAgent(OnboardAgent):
         ros_node: RealNode,
         depth_vis: bool = True,
         pointcloud_vis: bool = True,
+        lin_vel_deadband=0.5,
+        lin_vel_range=[0.5, 0.5],
+        ang_vel_deadband=0.15,
+        ang_vel_range=[0.0, 1.0],
     ):
         super().__init__(logdir, ros_node)
         self.ort_sessions = dict()
-        self.lin_vel_deadband = 0.45
-        self.ang_vel_deadband = 0.15
-        self.cmd_px_range = [0.0, 0.5]
+        self.lin_vel_deadband = lin_vel_deadband
+        self.ang_vel_deadband = ang_vel_deadband
+        self.cmd_px_range = lin_vel_range
         self.cmd_nx_range = [0.0, 0.0]
         self.cmd_py_range = [0.0, 0.0]
         self.cmd_ny_range = [0.0, 0.0]
-        self.cmd_pyaw_range = [0.0, 1.0]
-        self.cmd_nyaw_range = [0.0, 1.0]
+        self.cmd_pyaw_range = ang_vel_range
+        self.cmd_nyaw_range = ang_vel_range
         self._parse_obs_config()
         self._parse_action_config()
         self._load_models()
@@ -235,9 +239,8 @@ class ParkourAgent(OnboardAgent):
 
     def _get_base_velocity_obs(self):
         """Return shape: (3,)"""
-        joy_stick_command = self.ros_node.joy_stick_command  # [Lx, Ly, Rx, Ry]
         # left-y for forward/backward
-        ly = joy_stick_command[1]
+        ly = self.ros_node.joy_stick_data.ly
         if ly > self.lin_vel_deadband:
             vx = (ly - self.lin_vel_deadband) / (1 - self.lin_vel_deadband)  # (0, 1)
             vx = vx * (self.cmd_px_range[1] - self.cmd_px_range[0]) + self.cmd_px_range[0]
@@ -247,7 +250,7 @@ class ParkourAgent(OnboardAgent):
         else:
             vx = 0
         # left-x for side moving left/right
-        lx = -joy_stick_command[0]
+        lx = -self.ros_node.joy_stick_data.lx
         if lx > self.lin_vel_deadband:
             vy = (lx - self.lin_vel_deadband) / (1 - self.lin_vel_deadband)
             vy = vy * (self.cmd_py_range[1] - self.cmd_py_range[0]) + self.cmd_py_range[0]
@@ -257,7 +260,7 @@ class ParkourAgent(OnboardAgent):
         else:
             vy = 0
         # right-x for turning left/right
-        rx = -joy_stick_command[2]
+        rx = -self.ros_node.joy_stick_data.rx
         if rx > self.ang_vel_deadband:
             yaw = (rx - self.ang_vel_deadband) / (1 - self.ang_vel_deadband)
             yaw = yaw * (self.cmd_pyaw_range[1] - self.cmd_pyaw_range[0]) + self.cmd_pyaw_range[0]

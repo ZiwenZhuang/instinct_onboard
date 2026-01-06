@@ -23,42 +23,6 @@ class G1ParkourNode(UnitreeRsCameraNode):
         super().__init__(*args, **kwargs)
         self.available_agents = dict()
         self.current_agent_name: str | None = None
-        self.joy_stick_command = [0, 0, 0, 0]  # [lx, ly, rx, ry]
-        self.joy_stick_counter = [0, 0, 0, 0]  # [up, down, left, right]
-        self.joy_stick_button_flag = [False, False, False, False]  # [up, down, left, right]
-
-    def _joy_stick_callback(self, msg):
-        super()._joy_stick_callback(msg)
-        self.joy_stick_command = [msg.lx, msg.ly, msg.rx, msg.ry]
-        buttons = robot_cfgs.UnitreeWirelessButtons
-
-        if msg.keys & buttons.up:
-            if not self.joy_stick_button_flag[0]:
-                self.joy_stick_counter[0] += 1
-                self.joy_stick_button_flag[0] = True
-        else:
-            self.joy_stick_button_flag[0] = False
-
-        if msg.keys & buttons.down:
-            if not self.joy_stick_button_flag[1]:
-                self.joy_stick_counter[1] += 1
-                self.joy_stick_button_flag[1] = True
-        else:
-            self.joy_stick_button_flag[1] = False
-
-        if msg.keys & buttons.left:
-            if not self.joy_stick_button_flag[2]:
-                self.joy_stick_counter[2] += 1
-                self.joy_stick_button_flag[2] = True
-        else:
-            self.joy_stick_button_flag[2] = False
-
-        if msg.keys & buttons.right:
-            if not self.joy_stick_button_flag[3]:
-                self.joy_stick_counter[3] += 1
-                self.joy_stick_button_flag[3] = True
-        else:
-            self.joy_stick_button_flag[3] = False
 
     def register_agent(self, name: str, agent):
         self.available_agents[name] = agent
@@ -173,6 +137,12 @@ def main(args):
     parkour_agent = ParkourAgent(
         logdir=args.logdir,
         ros_node=node,
+        depth_vis=args.depth_vis,
+        pointcloud_vis=args.pointcloud_vis,
+        lin_vel_deadband=args.lin_vel_deadband,
+        lin_vel_range=args.lin_vel_range,
+        ang_vel_deadband=args.ang_vel_deadband,
+        ang_vel_range=args.ang_vel_range,
     )
     node.register_agent("parkour", parkour_agent)
 
@@ -226,16 +196,40 @@ if __name__ == "__main__":
         help="KPKD factor for the cold start agent (default: 2.0)",
     )
     parser.add_argument(
-        "--dof_max_err",
-        type=float,
-        default=1.0,
-        help="Max dof error in start up (default: 0.01)",
+        "--depth_vis",
+        action="store_true",
+        default=False,
+        help="Visualize the depth image (default: False)",
     )
     parser.add_argument(
-        "--start_steps",
-        type=int,
-        default=100,
-        help="Startup step size for the agent (default: 50)",
+        "--pointcloud_vis",
+        action="store_true",
+        default=False,
+        help="Visualize the pointcloud (default: False)",
+    )
+    parser.add_argument(
+        "--lin_vel_deadband",
+        type=float,
+        default=0.5,
+        help="Deadband of wireless control for linear velocity (default: 0.5)",
+    )
+    parser.add_argument(
+        "--lin_vel_range",
+        type=list,
+        default=[0.5, 0.5],
+        help="Range of linear velocity, only forward (default: [0.5 0.5])",
+    )
+    parser.add_argument(
+        "--ang_vel_deadband",
+        type=float,
+        default=0.5,
+        help="Deadband of wireless control for angular velocity (default: 0.5)",
+    )
+    parser.add_argument(
+        "--ang_vel_range",
+        type=list,
+        default=[0.0, 1.0],
+        help="Range of linear velocity, both turn left and turn right (default: [0.0 1.0])",
     )
     parser.add_argument(
         "--nodryrun",
@@ -251,9 +245,6 @@ if __name__ == "__main__":
     )
 
     args = parser.parse_args()
-    if not args.nodryrun:
-        args.dof_max_err = 1e10
-
     if args.debug:
         # import typing; typing.TYPE_CHECKING = True
         import debugpy
