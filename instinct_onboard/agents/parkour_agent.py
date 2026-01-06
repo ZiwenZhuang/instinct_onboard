@@ -31,20 +31,17 @@ class ParkourAgent(OnboardAgent):
         ros_node: RealNode,
         depth_vis: bool = True,
         pointcloud_vis: bool = True,
-        move_by_wireless_buttons: bool = True,
     ):
         super().__init__(logdir, ros_node)
         self.ort_sessions = dict()
-        self.lin_vel_deadband = 0.15
+        self.lin_vel_deadband = 0.45
         self.ang_vel_deadband = 0.15
-        self.cmd_px_range = [0.0, 0.8]
+        self.cmd_px_range = [0.0, 0.5]
         self.cmd_nx_range = [0.0, 0.0]
         self.cmd_py_range = [0.0, 0.0]
         self.cmd_ny_range = [0.0, 0.0]
         self.cmd_pyaw_range = [0.0, 1.0]
         self.cmd_nyaw_range = [0.0, 1.0]
-        self.move_by_wireless_remote = not move_by_wireless_buttons
-        self.move_by_wireless_buttons = move_by_wireless_buttons
         self._parse_obs_config()
         self._parse_action_config()
         self._load_models()
@@ -238,61 +235,40 @@ class ParkourAgent(OnboardAgent):
 
     def _get_base_velocity_obs(self):
         """Return shape: (3,)"""
-        if self.move_by_wireless_remote:
-            joy_stick_command = self.ros_node.joy_stick_command  # [Lx, Ly, Rx, Ry]
-            # left-y for forward/backward
-            ly = joy_stick_command[1]
-            if ly > self.lin_vel_deadband:
-                vx = (ly - self.lin_vel_deadband) / (1 - self.lin_vel_deadband)  # (0, 1)
-                vx = vx * (self.cmd_px_range[1] - self.cmd_px_range[0]) + self.cmd_px_range[0]
-            elif ly < -self.lin_vel_deadband:
-                vx = (ly + self.lin_vel_deadband) / (1 - self.lin_vel_deadband)  # (-1, 0)
-                vx = vx * (self.cmd_nx_range[1] - self.cmd_nx_range[0]) - self.cmd_nx_range[0]
-            else:
-                vx = 0
-            # left-x for side moving left/right
-            lx = -joy_stick_command[0]
-            if lx > self.lin_vel_deadband:
-                vy = (lx - self.lin_vel_deadband) / (1 - self.lin_vel_deadband)
-                vy = vy * (self.cmd_py_range[1] - self.cmd_py_range[0]) + self.cmd_py_range[0]
-            elif lx < -self.lin_vel_deadband:
-                vy = (lx + self.lin_vel_deadband) / (1 - self.lin_vel_deadband)
-                vy = vy * (self.cmd_ny_range[1] - self.cmd_ny_range[0]) - self.cmd_ny_range[0]
-            else:
-                vy = 0
-            # right-x for turning left/right
-            rx = -joy_stick_command[2]
-            if rx > self.ang_vel_deadband:
-                yaw = (rx - self.ang_vel_deadband) / (1 - self.ang_vel_deadband)
-                yaw = yaw * (self.cmd_pyaw_range[1] - self.cmd_pyaw_range[0]) + self.cmd_pyaw_range[0]
-            elif rx < -self.ang_vel_deadband:
-                yaw = (rx + self.ang_vel_deadband) / (1 - self.ang_vel_deadband)
-                yaw = yaw * (self.cmd_nyaw_range[1] - self.cmd_nyaw_range[0]) - self.cmd_nyaw_range[0]
-            else:
-                yaw = 0
+        joy_stick_command = self.ros_node.joy_stick_command  # [Lx, Ly, Rx, Ry]
+        # left-y for forward/backward
+        ly = joy_stick_command[1]
+        if ly > self.lin_vel_deadband:
+            vx = (ly - self.lin_vel_deadband) / (1 - self.lin_vel_deadband)  # (0, 1)
+            vx = vx * (self.cmd_px_range[1] - self.cmd_px_range[0]) + self.cmd_px_range[0]
+        elif ly < -self.lin_vel_deadband:
+            vx = (ly + self.lin_vel_deadband) / (1 - self.lin_vel_deadband)  # (-1, 0)
+            vx = vx * (self.cmd_nx_range[1] - self.cmd_nx_range[0]) - self.cmd_nx_range[0]
+        else:
+            vx = 0
+        # left-x for side moving left/right
+        lx = -joy_stick_command[0]
+        if lx > self.lin_vel_deadband:
+            vy = (lx - self.lin_vel_deadband) / (1 - self.lin_vel_deadband)
+            vy = vy * (self.cmd_py_range[1] - self.cmd_py_range[0]) + self.cmd_py_range[0]
+        elif lx < -self.lin_vel_deadband:
+            vy = (lx + self.lin_vel_deadband) / (1 - self.lin_vel_deadband)
+            vy = vy * (self.cmd_ny_range[1] - self.cmd_ny_range[0]) - self.cmd_ny_range[0]
+        else:
+            vy = 0
+        # right-x for turning left/right
+        rx = -joy_stick_command[2]
+        if rx > self.ang_vel_deadband:
+            yaw = (rx - self.ang_vel_deadband) / (1 - self.ang_vel_deadband)
+            yaw = yaw * (self.cmd_pyaw_range[1] - self.cmd_pyaw_range[0]) + self.cmd_pyaw_range[0]
+        elif rx < -self.ang_vel_deadband:
+            yaw = (rx + self.ang_vel_deadband) / (1 - self.ang_vel_deadband)
+            yaw = yaw * (self.cmd_nyaw_range[1] - self.cmd_nyaw_range[0]) - self.cmd_nyaw_range[0]
+        else:
+            yaw = 0
 
-            self.xyyaw_command = np.array([vx, vy, yaw], dtype=np.float32)
-            return self.xyyaw_command
-
-        elif self.move_by_wireless_buttons:
-            self.xyyaw_command[0] = self.ros_node.joy_stick_counter[0] * 0.5 - self.ros_node.joy_stick_counter[1] * 0.5
-            self.xyyaw_command[1] = 0
-            # right-x for turning left/right
-            joy_stick_command = self.ros_node.joy_stick_command  # [Lx, Ly, Rx, Ry]
-            rx = -joy_stick_command[2]
-            if rx > self.ang_vel_deadband:
-                yaw = (rx - self.ang_vel_deadband) / (1 - self.ang_vel_deadband)
-                yaw = yaw * (self.cmd_pyaw_range[1] - self.cmd_pyaw_range[0]) + self.cmd_pyaw_range[0]
-            elif rx < -self.ang_vel_deadband:
-                yaw = (rx + self.ang_vel_deadband) / (1 - self.ang_vel_deadband)
-                yaw = yaw * (self.cmd_nyaw_range[1] - self.cmd_nyaw_range[0]) - self.cmd_nyaw_range[0]
-            else:
-                yaw = 0
-
-            self.xyyaw_command[0] = np.clip(self.xyyaw_command[0], 0, 2.5)
-            self.xyyaw_command[1] = 0.0
-            self.xyyaw_command[2] = yaw
-            return self.xyyaw_command
+        self.xyyaw_command = np.array([vx, vy, yaw], dtype=np.float32)
+        return self.xyyaw_command
 
     def _get_joint_vel_rel_obs(self):
         """Return shape: (num_joints,)"""
