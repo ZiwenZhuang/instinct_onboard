@@ -22,7 +22,7 @@ class UnitreeWirelessButtons:
     left = 0b1000000000000000  # 32768
 
 
-class G1_29Dof:
+class G1_29Dof_TorsoBase:
     NUM_JOINTS = 29
     NUM_ACTIONS = 29
     joint_map = [

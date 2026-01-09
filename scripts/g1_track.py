@@ -78,7 +78,7 @@ Example Usage:
 
 Notes:
     - The script runs at 50Hz main loop frequency (20ms period)
-    - Robot configuration: G1_29Dof (29 degrees of freedom)
+    - Robot configuration: G1_29Dof_TorsoBase (29 degrees of freedom)
     - This script does NOT use depth camera (unlike g1_perceptive_track.py)
     - Motion visualization publishes joint states and TF transforms for RViz
 """
@@ -184,7 +184,7 @@ def main(args):
     rclpy.init()
 
     node = G1TrackingNode(
-        robot_class_name="G1_29Dof",
+        robot_class_name="G1_29Dof_TorsoBase",
         dryrun=not args.nodryrun,
     )
 

@@ -117,7 +117,7 @@ Example Usage:
 Notes:
     - The script runs at 50Hz main loop frequency (20ms period)
     - RealSense camera is configured at 480x270 resolution, 60 FPS
-    - Robot configuration: G1_29Dof (29 degrees of freedom)
+    - Robot configuration: G1_29Dof_TorsoBase (29 degrees of freedom)
     - Joint position protection ratio: 2.0
     - Camera runs in a separate process for better performance
     - Velocity control parameters affect joystick/wireless controller responsiveness
@@ -230,7 +230,7 @@ def main(args):
         rs_fps=60,
         camera_individual_process=True,
         joint_pos_protect_ratio=2.0,
-        robot_class_name="G1_29Dof",
+        robot_class_name="G1_29Dof_TorsoBase",
         dryrun=not args.nodryrun,
     )
 
