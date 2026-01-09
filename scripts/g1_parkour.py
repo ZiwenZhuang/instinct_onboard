@@ -17,6 +17,112 @@ from instinct_onboard.ros_nodes.realsense import UnitreeRsCameraNode
 
 MAIN_LOOP_FREQUENCY_CHECK_INTERVAL = 500
 
+"""
+G1 Parkour Node
+
+A ROS2 node for controlling Unitree G1 robot using parkour agent with depth camera perception.
+This script enables autonomous parkour behaviors including standing, walking, and obstacle
+navigation using depth perception from RealSense camera.
+
+Features:
+    - Depth perception using RealSense D435 camera
+    - ParkourAgent for autonomous parkour behaviors
+    - ParkourStandAgent for standing and balancing
+    - Velocity control via joystick/wireless controller
+    - Real-time obstacle avoidance and navigation
+
+Command-Line Arguments:
+    Required:
+        --logdir PATH          Directory containing the trained parkour agent model
+                              (must contain exported/actor.onnx and depth image encoder)
+        --standdir PATH        Directory containing the stand agent model
+                              (must contain exported/actor.onnx)
+
+    Optional:
+        --startup_step_size FLOAT
+                              Startup step size for cold start agent (default: 0.2)
+        --nodryrun            Disable dry run mode (default: False, runs in dry run mode)
+        --kpkd_factor FLOAT   KP/KD gain multiplier for cold start agent (default: 2.0)
+        --depth_vis            Enable depth image visualization (publishes to /realsense/depth_image)
+        --pointcloud_vis       Enable pointcloud visualization (publishes to /realsense/pointcloud)
+        --lin_vel_deadband FLOAT
+                              Deadband for linear velocity control (default: 0.5)
+        --lin_vel_range LIST   Range of linear velocity [min, max] (default: [0.5, 0.5])
+        --ang_vel_deadband FLOAT
+                              Deadband for angular velocity control (default: 0.5)
+        --ang_vel_range LIST   Range of angular velocity [min, max] (default: [0.0, 1.0])
+        --debug                Enable debug mode with debugpy (listens on 0.0.0.0:6789)
+
+Agent Workflow:
+    1. Cold Start Agent (initial state)
+       - Automatically starts when node launches
+       - Transitions robot to initial pose
+       - Press 'R1' to switch to stand agent (if available)
+       - Press any direction button to switch to parkour agent
+
+    2. Stand Agent (requires --standdir)
+       - Activated by pressing 'R1' after cold start completes
+       - Provides standing and balancing behavior
+       - Press 'L1' to switch to parkour agent
+
+    3. Parkour Agent
+       - Executes autonomous parkour behaviors with depth perception
+       - Responds to velocity commands from joystick/wireless controller
+       - Press 'R1' to switch back to stand agent
+
+Joystick Controls:
+    R1 Button:   Switch to stand agent (from cold start or parkour)
+    L1 Button:   Switch to parkour agent (from stand)
+    Direction Buttons: Switch to parkour agent (from cold start)
+
+Velocity Control (Wireless Controller):
+    Linear velocity is controlled based on forward/backward input with deadband
+    Angular velocity is controlled based on left/right rotation input with deadband
+    Velocity ranges can be adjusted via command-line arguments
+
+Example Usage:
+    Basic usage with required arguments:
+        python g1_parkour.py \\
+            --logdir /path/to/parkour/model \\
+            --standdir /path/to/stand/model
+
+    With visualization options:
+        python g1_parkour.py \\
+            --logdir /path/to/parkour/model \\
+            --standdir /path/to/stand/model \\
+            --depth_vis --pointcloud_vis
+
+    Real robot control (disable dry run):
+        python g1_parkour.py \\
+            --logdir /path/to/parkour/model \\
+            --standdir /path/to/stand/model \\
+            --nodryrun
+
+    With custom velocity parameters:
+        python g1_parkour.py \\
+            --logdir /path/to/parkour/model \\
+            --standdir /path/to/stand/model \\
+            --lin_vel_deadband 0.3 \\
+            --lin_vel_range 0.3 0.7 \\
+            --ang_vel_deadband 0.2 \\
+            --ang_vel_range 0.0 1.5
+
+    With custom startup parameters:
+        python g1_parkour.py \\
+            --logdir /path/to/parkour/model \\
+            --standdir /path/to/stand/model \\
+            --startup_step_size 0.3 \\
+            --kpkd_factor 1.5
+
+Notes:
+    - The script runs at 50Hz main loop frequency (20ms period)
+    - RealSense camera is configured at 480x270 resolution, 60 FPS
+    - Robot configuration: G1_29Dof (29 degrees of freedom)
+    - Joint position protection ratio: 2.0
+    - Camera runs in a separate process for better performance
+    - Velocity control parameters affect joystick/wireless controller responsiveness
+"""
+
 
 class G1ParkourNode(UnitreeRsCameraNode):
     def __init__(self, *args, **kwargs):

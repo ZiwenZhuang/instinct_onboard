@@ -17,6 +17,113 @@ from instinct_onboard.ros_nodes.realsense import UnitreeRsCameraNode
 
 MAIN_LOOP_FREQUENCY_CHECK_INTERVAL = 500
 
+"""
+G1 Perceptive Tracking Node
+
+A ROS2 node for controlling Unitree G1 robot using perceptive tracking agent with depth camera
+perception. This script integrates RealSense camera for depth-based motion tracking and supports
+multiple agent modes for different behaviors.
+
+Features:
+    - Depth perception using RealSense D435 camera
+    - PerceptiveTrackerAgent with depth image encoding
+    - Multiple agent modes: cold start, walk (optional), and tracking
+    - Real-time motion tracking with joystick control
+    - Visualization options for debugging
+
+Command-Line Arguments:
+    Required:
+        --logdir PATH          Directory containing the trained perceptive tracking agent model
+                              (must contain exported/actor.onnx and exported/0-depth_image.onnx)
+        --motion_dir PATH      Directory containing retargeted motion files (.npz format)
+
+    Optional:
+        --walk_logdir PATH     Directory containing the walk agent model (enables walk agent mode)
+        --startup_step_size FLOAT
+                              Startup step size for cold start agent (default: 0.2)
+        --nodryrun            Disable dry run mode (default: False, runs in dry run mode)
+        --kpkd_factor FLOAT    KP/KD gain multiplier for cold start agent (default: 2.0)
+        --motion_vis           Enable motion visualization by publishing joint states and TF
+                              (requires robot_state_publisher for visualization)
+        --depth_vis            Enable depth image visualization (publishes to /realsense/depth_image)
+        --pointcloud_vis       Enable pointcloud visualization (publishes to /realsense/pointcloud)
+        --debug                Enable debug mode with debugpy (listens on 0.0.0.0:6789)
+
+Agent Workflow:
+    1. Cold Start Agent (initial state)
+       - Automatically starts when node launches
+       - Transitions robot to initial pose
+       - Press 'L1' to switch to walk agent (if available)
+       - Press any direction button to switch to tracking agent
+
+    2. Walk Agent (optional, requires --walk_logdir)
+       - Activated by pressing 'L1' after cold start completes
+       - Provides basic walking behavior
+       - Press direction buttons to switch to tracking agent with specific motions:
+         * UP:    diveroll4-ziwen-0-retargeted.npz
+         * DOWN:  kneelClimbStep1-x-0.1-ziwen-retargeted.npz
+         * LEFT:  rollVault11-ziwen-retargeted.npz
+         * RIGHT: jumpsit2-ziwen-retargeted.npz
+         * X:     superheroLanding-retargeted.npz
+       - Press 'L1' from tracking agent to return to walk agent
+
+    3. Tracking Agent (perceptive tracking)
+       - Executes motion sequences with depth perception
+       - Press 'A' button to match motion to current robot heading
+       - Automatically switches to walk agent when motion completes (if available)
+       - Otherwise turns off motors and exits
+
+Joystick Controls:
+    A Button:     Match tracking motion to current robot heading
+    L1 Button:   Switch between walk and tracking agents
+    UP:           Load and execute diveroll4 motion sequence
+    DOWN:         Load and execute kneelClimbStep1 motion sequence
+    LEFT:         Load and execute rollVault11 motion sequence
+    RIGHT:        Load and execute jumpsit2 motion sequence
+    X Button:     Load and execute superheroLanding motion sequence
+
+Example Usage:
+    Basic usage with required arguments:
+        python g1_perceptive_track.py --logdir /path/to/tracking/model --motion_dir /path/to/motions
+
+    With walk agent:
+        python g1_perceptive_track.py \\
+            --logdir /path/to/tracking/model \\
+            --motion_dir /path/to/motions \\
+            --walk_logdir /path/to/walk/model
+
+    With visualization options:
+        python g1_perceptive_track.py \\
+            --logdir /path/to/tracking/model \\
+            --motion_dir /path/to/motions \\
+            --depth_vis --pointcloud_vis --motion_vis
+
+    Dry run mode (default, no actual robot control):
+        python g1_perceptive_track.py \\
+            --logdir /path/to/tracking/model \\
+            --motion_dir /path/to/motions
+
+    Real robot control (disable dry run):
+        python g1_perceptive_track.py \\
+            --logdir /path/to/tracking/model \\
+            --motion_dir /path/to/motions \\
+            --nodryrun
+
+    With custom startup parameters:
+        python g1_perceptive_track.py \\
+            --logdir /path/to/tracking/model \\
+            --motion_dir /path/to/motions \\
+            --startup_step_size 0.3 \\
+            --kpkd_factor 1.5
+
+Notes:
+    - The script runs at 50Hz main loop frequency (20ms period)
+    - RealSense camera is configured at 480x270 resolution, 60 FPS
+    - Robot configuration: G1_29Dof (29 degrees of freedom)
+    - Joint position protection ratio: 2.0
+    - Camera runs in a separate process for better performance
+"""
+
 
 class G1TrackingNode(UnitreeRsCameraNode):
     def __init__(self, *args, motion_vis: bool = False, **kwargs):

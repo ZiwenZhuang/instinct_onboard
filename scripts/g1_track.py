@@ -12,6 +12,77 @@ from instinct_onboard.agents.base import ColdStartAgent
 from instinct_onboard.agents.tracking_agent import TrackerAgent
 from instinct_onboard.ros_nodes.unitree import UnitreeNode
 
+"""
+G1 Tracking Node
+
+A ROS2 node for controlling Unitree G1 robot using basic tracking agent without depth perception.
+This script executes pre-recorded motion sequences by tracking joint positions and velocities
+from motion files.
+
+Features:
+    - TrackerAgent for motion sequence playback
+    - Cold start agent for safe initialization
+    - Motion visualization via joint states and TF
+    - Simple two-agent workflow
+
+Command-Line Arguments:
+    Required:
+        --logdir PATH          Directory containing the trained tracking agent model
+                              (must contain exported/actor.onnx)
+        --motion_dir PATH      Directory containing retargeted motion files (.npz format)
+
+    Optional:
+        --startup_step_size FLOAT
+                              Startup step size for cold start agent (default: 0.2)
+        --nodryrun            Disable dry run mode (default: False, runs in dry run mode)
+        --kpkd_factor FLOAT   KP/KD gain multiplier for cold start agent (default: 1.0)
+        --debug                Enable debug mode with debugpy (listens on 0.0.0.0:6789)
+
+Agent Workflow:
+    1. Cold Start Agent (initial state)
+       - Automatically starts when node launches
+       - Transitions robot to initial pose from motion file
+       - Press 'L1' button to switch to tracking agent after completion
+
+    2. Tracking Agent
+       - Executes motion sequences from motion files
+       - Press 'A' button to match motion to current robot heading
+       - Automatically turns off motors and exits when motion completes
+
+Joystick Controls:
+    A Button:     Match tracking motion to current robot heading
+    L1 Button:   Switch from cold start to tracking agent
+
+Example Usage:
+    Basic usage with required arguments:
+        python g1_track.py --logdir /path/to/tracking/model --motion_dir /path/to/motions
+
+    Real robot control (disable dry run):
+        python g1_track.py \\
+            --logdir /path/to/tracking/model \\
+            --motion_dir /path/to/motions \\
+            --nodryrun
+
+    With custom startup parameters:
+        python g1_track.py \\
+            --logdir /path/to/tracking/model \\
+            --motion_dir /path/to/motions \\
+            --startup_step_size 0.3 \\
+            --kpkd_factor 1.5
+
+    Debug mode:
+        python g1_track.py \\
+            --logdir /path/to/tracking/model \\
+            --motion_dir /path/to/motions \\
+            --debug
+
+Notes:
+    - The script runs at 50Hz main loop frequency (20ms period)
+    - Robot configuration: G1_29Dof (29 degrees of freedom)
+    - This script does NOT use depth camera (unlike g1_perceptive_track.py)
+    - Motion visualization publishes joint states and TF transforms for RViz
+"""
+
 
 class G1TrackingNode(UnitreeNode):
     def __init__(self, *args, **kwargs):
