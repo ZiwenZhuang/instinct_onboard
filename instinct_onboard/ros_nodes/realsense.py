@@ -10,6 +10,8 @@ from typing import Literal
 import numpy as np
 import pyrealsense2 as rs
 
+from instinct_onboard.utils import _depth_to_ros_pointcloud_msg
+
 from .unitree import UnitreeNode
 
 REALSENSE_PROCESS_FREQUENCY_CHECK_INTERVAL = 500
@@ -118,6 +120,7 @@ class RsCameraNodeMixin:
         *args,
         rs_resolution: tuple[int, int] = (480, 270),  # (width, height)
         rs_fps: int = 60,
+        rs_vfov_deg: float = 58.0,
         camera_individual_process: bool = False,
         camera_dead_behavior: Literal["restart", "raise_error", "none"] = "restart",
         main_process_affinity: set[int] | None = None,
@@ -128,6 +131,7 @@ class RsCameraNodeMixin:
         # Add any depth-specific initialization here
         self.rs_resolution = rs_resolution
         self.rs_fps = rs_fps
+        self.rs_vfov_deg = rs_vfov_deg
         self.camera_individual_process = camera_individual_process
         self.camera_dead_behavior = camera_dead_behavior
         self.main_process_affinity = main_process_affinity
@@ -198,6 +202,14 @@ class RsCameraNodeMixin:
             self.camera_process.start()
         else:
             self.initialize_camera()
+
+    def depth_image_to_pointcloud_msg(self, depth: np.ndarray):
+        return _depth_to_ros_pointcloud_msg(
+            depth=depth,
+            frame_id="realsense_depth_link",
+            vfov_deg=self.rs_vfov_deg,
+            stamp=self.get_clock().now().to_msg(),
+        )
 
     def handle_camera_dead_behavior(self):
         if self.camera_dead_behavior == "restart":

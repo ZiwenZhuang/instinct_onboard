@@ -2,6 +2,10 @@ from typing import Sequence
 
 import numpy as np
 import quaternion
+from sensor_msgs.msg import PointCloud2, PointField
+
+# ROS2 related imports
+from std_msgs.msg import Time
 
 
 def quat_rotate_inverse(q: np.quaternion, v: np.array):
@@ -172,3 +176,79 @@ class CircularBuffer:
             return
         self._buffer[:] = 0.0
         self._num_pushes = 0
+
+
+def _depth_to_ros_pointcloud_msg(
+    depth: np.ndarray,
+    frame_id: str,
+    vfov_deg: float = 58.0,
+    stamp: Time | None = None,
+) -> PointCloud2:
+    """Convert depth image to ROS PointCloud2 message.
+    Typically, do not call this function directly. Call from the camera ros_node instead.
+
+    Args:
+        depth: The depth image in (height, width) shape.
+        frame_id: The frame_id of the pointcloud.
+        vfov_deg: The vertical field of view in degrees.
+    Returns:
+        The ROS PointCloud2 message, where +x becomes where the depth camera is looking at.
+
+    NOTE:
+        The ROS PointCloud2 message is in the frame of the depth camera.
+        +x becomes where the depth camera is looking at, +y becomes left, +z becomes up.
+        This is different from the conventional camera frame.
+    """
+    height, width = depth.shape
+    vfov_rad = np.deg2rad(vfov_deg)
+    f = (height / 2.0) / np.tan(vfov_rad / 2.0)  # focal length in pixels (assuming fy = f)
+
+    # Assuming square pixels, fx = fy = f, cx = width/2, cy = height/2
+    cx = width / 2.0
+    cy = height / 2.0
+
+    # Create grid of pixel coordinates
+    u, v = np.meshgrid(np.arange(width), np.arange(height))
+
+    depth = depth.astype(np.float32)
+    x = (u - cx) * depth / f
+    y = (v - cy) * depth / f
+    z = depth
+
+    # Stack to (H*W, 3)
+    points = np.stack((x, y, z), axis=-1).reshape(-1, 3)
+
+    # Filter invalid points (depth == 0)
+    valid = (z > 0).flatten()
+    points = points[valid]
+
+    # Apply 90-degree rotation around +Y axis: new_x = z, new_y = y, new_z = -x
+    rotated_points = np.empty_like(points)
+    rotated_points[:, 0] = points[:, 2]  # new_x = old_z
+    rotated_points[:, 1] = points[:, 1]  # new_y = old_y
+    rotated_points[:, 2] = -points[:, 0]  # new_z = -old_x
+
+    # Apply additional -90 degree rotation around +X axis: final_x = rotated_x, final_y = rotated_z, final_z = -rotated_y
+    final_points = np.empty_like(rotated_points)
+    final_points[:, 0] = rotated_points[:, 0]
+    final_points[:, 1] = rotated_points[:, 2]
+    final_points[:, 2] = -rotated_points[:, 1]
+
+    # Create PointCloud2
+    msg = PointCloud2()
+    msg.header.stamp = stamp
+    msg.header.frame_id = frame_id
+    msg.height = 1
+    msg.width = len(final_points)
+    msg.fields = [
+        PointField(name="x", offset=0, datatype=PointField.FLOAT32, count=1),
+        PointField(name="y", offset=4, datatype=PointField.FLOAT32, count=1),
+        PointField(name="z", offset=8, datatype=PointField.FLOAT32, count=1),
+    ]
+    msg.is_bigendian = False
+    msg.point_step = 12  # 3 floats * 4 bytes
+    msg.row_step = msg.point_step * msg.width
+    msg.is_dense = True
+    msg.data = final_points.astype(np.float32).tobytes()
+
+    return msg
