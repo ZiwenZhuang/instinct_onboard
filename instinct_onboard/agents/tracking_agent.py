@@ -258,12 +258,12 @@ class PerceptiveTrackerAgent(TrackerAgent):
         super().__init__(*args, **kwargs)
         self.depth_vis = depth_vis
         if self.depth_vis:
-            self.debug_depth_publisher = self.ros_node.create_publisher(Image, "/realsense/depth_image", 10)
+            self.debug_depth_publisher = self.ros_node.create_publisher(Image, "/debug/depth_image", 10)
         else:
             self.debug_depth_publisher = None
         self.pointcloud_vis = pointcloud_vis
         if self.pointcloud_vis:
-            self.debug_pointcloud_publisher = self.ros_node.create_publisher(PointCloud2, "/realsense/pointcloud", 10)
+            self.debug_pointcloud_publisher = self.ros_node.create_publisher(PointCloud2, "/debug/pointcloud", 10)
         else:
             self.debug_pointcloud_publisher = None
 
