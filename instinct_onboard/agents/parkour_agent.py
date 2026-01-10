@@ -149,7 +149,10 @@ class ParkourAgent(OnboardAgent):
         self.y_valid = np.clip(y_grid, 0, rows - 1)
         self.x_valid = np.clip(x_grid, 0, cols - 1)
         # For downsample history
-        downsample_factor = self.cfg["observations"]["policy"]["depth_image"]["params"]["time_downsample_factor"]
+        if "history_skip_frames" in self.cfg["observations"]["policy"]["depth_image"]["params"]:
+            downsample_factor = self.cfg["observations"]["policy"]["depth_image"]["params"]["history_skip_frames"]
+        else:
+            downsample_factor = self.cfg["observations"]["policy"]["depth_image"]["params"]["time_downsample_factor"]
         frames = int(
             (self.cfg["scene"]["camera"]["data_histories"]["distance_to_image_plane_noised"] - 1) / downsample_factor
             + 1
@@ -316,7 +319,7 @@ class ParkourAgent(OnboardAgent):
         output_norm = filt_norm * (self.depth_output_range[1] - self.depth_output_range[0]) + self.depth_output_range[0]
         self.depth_image_buffer.append(output_norm)
 
-    def _get_delayed_visualizable_image(self):
+    def _get_delayed_visualizable_image_obs(self):
         return self._get_depth_image_downsample_obs()
 
     def _get_depth_image_downsample_obs(self):
