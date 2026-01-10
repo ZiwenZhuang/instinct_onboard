@@ -263,6 +263,9 @@ def main(args):
     )
     node.register_agent("cold_start", cold_start_agent)
 
+    if args.depth_vis or args.pointcloud_vis:
+        node.publish_auxiliary_static_transforms("realsense_depth_link_transform")
+
     node.start_ros_handlers()
     node.get_logger().info("G1ParkourNode is ready to run.")
     try:

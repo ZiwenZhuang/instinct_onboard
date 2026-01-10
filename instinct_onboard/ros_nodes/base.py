@@ -4,8 +4,10 @@ from typing import Optional
 
 import numpy as np
 import rclpy
+from geometry_msgs.msg import TransformStamped
 from rclpy.node import Node
 from std_msgs.msg import Float32MultiArray, String
+from tf2_ros import StaticTransformBroadcaster
 
 from instinct_onboard import robot_cfgs
 
@@ -120,6 +122,32 @@ class RealNode(Node):
     @property
     def joy_stick_data(self) -> JoyStickData:
         return self._joy_stick_data
+
+    def publish_auxiliary_static_transforms(self, transform_field_name: str):
+        """Publish some additional static transforms that are not part of the robot model.
+        Args:
+            transform_field_name: The field name in the robot_cfg of the given robot class. The transform data should
+                be a dictionary with the following keys:
+                    - translation: (x, y, z)
+                    - rotation: (w, x, y, z)
+                    - parent_frame: the frame id of the parent frame
+                    - child_frame: the frame id of the child frame
+        """
+        if not hasattr(self, "static_tf_broadcaster"):
+            self.static_tf_broadcaster = StaticTransformBroadcaster(self)
+        t = TransformStamped()
+        t.header.stamp = self.get_clock().now().to_msg()
+        robot_transform_data = getattr(getattr(robot_cfgs, self.robot_class_name), transform_field_name)
+        t.header.frame_id = robot_transform_data["parent_frame"]
+        t.child_frame_id = robot_transform_data["child_frame"]
+        t.transform.translation.x = robot_transform_data["translation"][0]
+        t.transform.translation.y = robot_transform_data["translation"][1]
+        t.transform.translation.z = robot_transform_data["translation"][2]
+        t.transform.rotation.w = robot_transform_data["rotation"][0]
+        t.transform.rotation.x = robot_transform_data["rotation"][1]
+        t.transform.rotation.y = robot_transform_data["rotation"][2]
+        t.transform.rotation.z = robot_transform_data["rotation"][3]
+        self.static_tf_broadcaster.sendTransform(t)
 
     """
     Get observation term from the corresponding buffers

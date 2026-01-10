@@ -329,6 +329,9 @@ def main(args):
     else:
         cold_start_agent = tracking_agent.get_cold_start_agent(args.startup_step_size, args.kpkd_factor)
 
+    if args.depth_vis or args.pointcloud_vis:
+        node.publish_auxiliary_static_transforms("realsense_depth_link_transform")
+
     node.register_agent("cold_start", cold_start_agent)
     node.register_agent("tracking", tracking_agent)
 

@@ -1,3 +1,5 @@
+import math
+
 import numpy as np
 
 """A general configuration file for the robots, shared between different scripts. """
@@ -261,3 +263,18 @@ class G1_29Dof_TorsoBase:
         https://support.unitree.com/home/zh/G1_developer/basic_services_interface
         https://github.com/unitreerobotics/unitree_ros/tree/master/robots/g1_description
     """
+    realsense_depth_link_transform = {
+        "translation": (
+            0.04764571478 + 0.0039635 - 0.0042 * math.cos(math.radians(48)),
+            0.015,
+            0.46268178553 - 0.044 + 0.0042 * math.sin(math.radians(48)) + 0.016,
+        ),
+        "rotation": (
+            math.cos(math.radians(0.5) / 2) * math.cos(math.radians(48) / 2),  # w
+            math.sin(math.radians(0.5) / 2),  # x
+            math.sin(math.radians(48) / 2),  # y
+            0.0,  # z
+        ),
+        "parent_frame": "torso_link",
+        "child_frame": "realsense_depth_link",
+    }

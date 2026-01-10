@@ -263,21 +263,6 @@ class PerceptiveTrackerAgent(TrackerAgent):
             self.debug_depth_publisher = None
         self.pointcloud_vis = pointcloud_vis
         if self.pointcloud_vis:
-            # Publish static TF
-            self.static_tf_broadcaster = StaticTransformBroadcaster(self.ros_node)
-            t = TransformStamped()
-            t.header.stamp = self.ros_node.get_clock().now().to_msg()
-            t.header.frame_id = "torso_link"
-            t.child_frame_id = "d435_depth_link"
-            t.transform.translation.x = 0.04764571478 + 0.0039635 - 0.0042 * math.cos(math.radians(48))
-            t.transform.translation.y = 0.015
-            t.transform.translation.z = 0.46268178553 - 0.044 + 0.0042 * math.sin(math.radians(48)) + 0.016
-            t.transform.rotation.w = math.cos(math.radians(0.5) / 2) * math.cos(math.radians(48) / 2)
-            t.transform.rotation.x = math.sin(math.radians(0.5) / 2)
-            t.transform.rotation.y = math.sin(math.radians(48) / 2)
-            t.transform.rotation.z = 0.0
-            self.static_tf_broadcaster.sendTransform(t)
-
             self.debug_pointcloud_publisher = self.ros_node.create_publisher(PointCloud2, "/realsense/pointcloud", 10)
         else:
             self.debug_pointcloud_publisher = None
