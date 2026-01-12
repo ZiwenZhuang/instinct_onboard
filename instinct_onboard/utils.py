@@ -1,11 +1,11 @@
-from typing import Sequence
+from typing import Optional, Sequence
 
 import numpy as np
 import quaternion
-from sensor_msgs.msg import PointCloud2, PointField
 
 # ROS2 related imports
-from std_msgs.msg import Time
+from builtin_interfaces.msg import Time
+from sensor_msgs.msg import PointCloud2, PointField
 
 
 def quat_rotate_inverse(q: np.quaternion, v: np.array):
@@ -182,7 +182,7 @@ def _depth_to_ros_pointcloud_msg(
     depth: np.ndarray,
     frame_id: str,
     vfov_deg: float = 58.0,
-    stamp: Time | None = None,
+    stamp: Optional[Time] = None,
 ) -> PointCloud2:
     """Convert depth image to ROS PointCloud2 message.
     Typically, do not call this function directly. Call from the camera ros_node instead.
