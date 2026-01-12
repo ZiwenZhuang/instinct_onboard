@@ -198,6 +198,8 @@ class ParkourAgent(OnboardAgent):
                 dtype=np.uint16,
             )
             depth_image_msg = rnp.msgify(Image, depth_image_msg_data, encoding="16UC1")
+            depth_image_msg.header.stamp = self.ros_node.get_clock().now().to_msg()
+            depth_image_msg.header.frame_id = "realsense_depth_link"
             self.debug_depth_publisher.publish(depth_image_msg)
         if self.debug_pointcloud_publisher is not None:
             pointcloud_msg = self.ros_node.depth_image_to_pointcloud_msg(
