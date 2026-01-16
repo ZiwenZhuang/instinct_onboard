@@ -71,7 +71,7 @@ setup(
         "prettytable",
         onnx_runtime_dep,  # Auto-detected GPU or CPU version
         "empy==3.3.2",  # codespell:ignore
-        "ros2_numpy",  # Required for ROS2 message handling
+        "ros2_numpy",  # Required for ROS2 message handling, install from source: https://github.com/nitesh-subedi/ros2_numpy
         "pyrealsense2",
     ],
     extras_require={
